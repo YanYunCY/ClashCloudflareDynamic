@@ -44,15 +44,31 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from storage_maintenance import (
-    cleanup_managed_backups,
-    connect_sqlite_with_recovery,
-)
+try:
+    from .storage_maintenance import (
+        cleanup_managed_backups,
+        connect_sqlite_with_recovery,
+    )
+except ImportError:  # Flat deployment bundle installed on Windows.
+    from storage_maintenance import (
+        cleanup_managed_backups,
+        connect_sqlite_with_recovery,
+    )
 
-ROOT = Path(__file__).resolve().parent
+MODULE_DIR = Path(__file__).resolve().parent
+REPOSITORY_ROOT = MODULE_DIR.parents[1]
+IS_SOURCE_LAYOUT = (
+    (REPOSITORY_ROOT / "scripts" / "windows").is_dir()
+    and (REPOSITORY_ROOT / "config").is_dir()
+)
+ROOT = REPOSITORY_ROOT if IS_SOURCE_LAYOUT else MODULE_DIR
 SETTINGS_PATH = ROOT / "settings.json"
 TEMPLATE_PATH = ROOT / "node_template.json"
-SEEDS_PATH = ROOT / "seed_ips.txt"
+SEEDS_PATH = (
+    REPOSITORY_ROOT / "config" / "seed_ips.txt"
+    if IS_SOURCE_LAYOUT
+    else ROOT / "seed_ips.txt"
+)
 VERGE_HOME = Path(os.environ.get("APPDATA", str(ROOT))) / "io.github.clash-verge-rev.clash-verge-rev"
 PROVIDER_DIR = VERGE_HOME / "providers" / "ClashCloudflareDynamic"
 ACTIVE_PROVIDER_PATH = PROVIDER_DIR / "cloudflare_active.yaml"
@@ -69,7 +85,11 @@ BEST_IPS_PATH = LOG_DIR / "best_ips.txt"
 HISTORY_PATH = LOG_DIR / "history.csv"
 RUN_LOCK_PATH = ROOT / "dynamic_selector.lock"
 DISCOVERY_DB_PATH = ROOT / "discovery_history.sqlite3"
-NOTIFY_SCRIPT_PATH = ROOT / "notify_windows.ps1"
+NOTIFY_SCRIPT_PATH = (
+    REPOSITORY_ROOT / "scripts" / "windows" / "notify_windows.ps1"
+    if IS_SOURCE_LAYOUT
+    else ROOT / "notify_windows.ps1"
+)
 NOTIFICATION_REPORT_DIR = LOG_DIR / "notification_reports"
 BACKUP_DIR = ROOT / "backups"
 NOTIFICATION_REPORT_RETENTION_DAYS = 30.0

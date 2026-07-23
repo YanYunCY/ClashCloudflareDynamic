@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import storage_maintenance as maintenance
+from clash_cloudflare_dynamic import storage_maintenance as maintenance
 
 
 def initialize_test_database(connection: sqlite3.Connection) -> None:

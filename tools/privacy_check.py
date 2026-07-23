@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCAL_CONFIGS = {Path("settings.json"), Path("node_template.json")}
 SKIP_DIRECTORIES = {
     ".git",
+    "dist",
 }
 SENSITIVE_DIRECTORIES = {
     ".idea",
@@ -70,6 +71,7 @@ REQUIRED_GITIGNORE_LINES = {
     "state.json",
     "dynamic_selector.lock",
     "discovery_history.sqlite3*",
+    "dist/",
 }
 
 USER_PROFILE_RE = re.compile(

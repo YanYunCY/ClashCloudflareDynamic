@@ -9,7 +9,19 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Root = $PSScriptRoot
+$ScriptRoot = $PSScriptRoot
+$RepositoryRootCandidate = [IO.Path]::GetFullPath((Join-Path $ScriptRoot "..\.."))
+$RepositoryScriptsCandidate = Join-Path $RepositoryRootCandidate "scripts\windows"
+$IsRepositoryLayout = (
+    [IO.Path]::GetFullPath($ScriptRoot).Equals(
+        [IO.Path]::GetFullPath($RepositoryScriptsCandidate),
+        [StringComparison]::OrdinalIgnoreCase
+    ) -and
+    (Test-Path -LiteralPath (Join-Path $RepositoryRootCandidate "src\clash_cloudflare_dynamic") -PathType Container) -and
+    (Test-Path -LiteralPath (Join-Path $RepositoryRootCandidate "examples") -PathType Container)
+)
+$Root = if ($IsRepositoryLayout) { $RepositoryRootCandidate } else { $ScriptRoot }
+$ExamplesRoot = Join-Path $Root "examples"
 $LocalNodeTemplatePath = Join-Path $Root "node_template.json"
 $NodeTemplateExistedAtStart = Test-Path `
     -LiteralPath $LocalNodeTemplatePath `
@@ -18,14 +30,14 @@ $NodeTemplateExistedAtStart = Test-Path `
 if ($Port -ne 0 -and ($Port -lt 1 -or $Port -gt 65535)) {
     throw "Port 必须为 1 到 65535；省略或设为 0 时使用模板默认端口。"
 }
-$SettingsExamplePath = Join-Path $Root "examples\settings.example.json"
+$SettingsExamplePath = Join-Path $ExamplesRoot "settings.example.json"
 if ([string]::IsNullOrWhiteSpace($NodeTemplatePath)) {
     $ProtocolExamples = @{
-        vmess = "examples\node_template.example.json"
-        vless = "examples\node_template.vless.example.json"
-        trojan = "examples\node_template.trojan.example.json"
+        vmess = "node_template.example.json"
+        vless = "node_template.vless.example.json"
+        trojan = "node_template.trojan.example.json"
     }
-    $SelectedTemplatePath = Join-Path $Root $ProtocolExamples[$Protocol]
+    $SelectedTemplatePath = Join-Path $ExamplesRoot $ProtocolExamples[$Protocol]
 } else {
     if (-not (Test-Path -LiteralPath $NodeTemplatePath -PathType Leaf)) {
         throw "自定义节点模板不存在：$NodeTemplatePath"
@@ -154,6 +166,7 @@ Write-Host ""
 Write-Host "下一步：" -ForegroundColor Cyan
 Write-Host "1. 编辑 settings.json，确认 Mihomo controller、secret 和 mixed_proxy。"
 Write-Host "2. 编辑 node_template.json，核对协议、端口、认证与 TLS/传输参数。"
-Write-Host "3. 运行：powershell -ExecutionPolicy Bypass -File .\install_hybrid_5000.ps1"
+$InstallerPath = Join-Path $ScriptRoot "install_hybrid_5000.ps1"
+Write-Host "3. 运行：powershell -ExecutionPolicy Bypass -File `"$InstallerPath`""
 Write-Host ""
 Write-Host "settings.json 和 node_template.json 已被 .gitignore 排除，请勿强制提交。" -ForegroundColor Yellow

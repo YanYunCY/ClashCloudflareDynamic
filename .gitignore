@@ -25,6 +25,7 @@ venv/
 .vscode/
 
 # Local archives and temporary files
+dist/
 *.zip
 *.tmp
 *.bak

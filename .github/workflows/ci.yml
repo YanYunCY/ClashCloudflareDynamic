@@ -29,11 +29,24 @@ jobs:
 
       - name: Compile Python
         shell: pwsh
-        run: python -m py_compile dynamic_selector.py storage_maintenance.py health_monitor_launcher.py tools/privacy_check.py
+        run: |
+          python -m py_compile `
+            src/clash_cloudflare_dynamic/__init__.py `
+            src/clash_cloudflare_dynamic/dynamic_selector.py `
+            src/clash_cloudflare_dynamic/health_monitor_launcher.py `
+            src/clash_cloudflare_dynamic/storage_maintenance.py `
+            tools/build_release.py `
+            tools/privacy_check.py
+
+      - name: Build deployment bundle from source
+        shell: pwsh
+        run: python tools/build_release.py
 
       - name: Run Python unit tests
         shell: pwsh
-        run: python -m unittest -v test_dynamic_selector.py test_storage_maintenance.py test_privacy_check.py
+        run: |
+          $env:PYTHONPATH = Join-Path $PWD "src"
+          python -W error::ResourceWarning -m unittest discover -s tests/python -p "test_*.py" -v
 
       - name: Parse PowerShell scripts
         shell: powershell
@@ -62,22 +75,31 @@ jobs:
 
       - name: Run setup isolation tests
         shell: powershell
-        run: ./test_setup.ps1
+        run: ./tests/windows/test_setup.ps1
 
       - name: Run installer isolation tests
         shell: powershell
-        run: ./test_install_hybrid.ps1
+        run: ./tests/windows/test_install_hybrid.ps1
 
       - name: Run uninstaller isolation tests
         shell: powershell
-        run: ./test_uninstall.ps1
+        run: ./tests/windows/test_uninstall.ps1
 
       - name: Remove generated caches
         shell: pwsh
         run: |
-          Get-ChildItem -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
-          if (Test-Path logs) { Remove-Item logs -Recurse -Force }
+          Get-ChildItem -Recurse -Directory |
+            Where-Object { $_.Name -in @("__pycache__", "logs") } |
+            Sort-Object FullName -Descending |
+            Remove-Item -Recurse -Force
 
       - name: Run privacy check
         shell: pwsh
         run: python tools/privacy_check.py
+
+      - name: Upload Windows deployment bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClashCloudflareDynamic-windows
+          path: dist/ClashCloudflareDynamic.zip
+          if-no-files-found: error

@@ -1,6 +1,12 @@
 ﻿#requires -Version 5.1
 $ErrorActionPreference = "Stop"
 
+$RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+$ReleaseRoot = Join-Path $RepositoryRoot "dist\ClashCloudflareDynamic"
+if (-not (Test-Path -LiteralPath $ReleaseRoot -PathType Container)) {
+    throw "缺少测试发布包；请先运行 python .\tools\build_release.py"
+}
+
 function Get-ScheduledTask {
     [CmdletBinding()]
     param()
@@ -40,7 +46,7 @@ $OriginalAppData = $env:APPDATA
 $TestRoot = Join-Path ([IO.Path]::GetTempPath()) (
     "cfdyn-uninstall-test-" + [Guid]::NewGuid().ToString("N")
 )
-$UninstallScript = Join-Path $PSScriptRoot "uninstall.ps1"
+$UninstallScript = Join-Path $ReleaseRoot "uninstall.ps1"
 $global:ClashCloudflareUninstallQueryFailure = $false
 $global:ClashCloudflareUninstallTasks = @()
 

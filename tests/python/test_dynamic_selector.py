@@ -11,8 +11,8 @@ from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
-import dynamic_selector as selector
-import health_monitor_launcher as health_launcher
+from clash_cloudflare_dynamic import dynamic_selector as selector
+from clash_cloudflare_dynamic import health_monitor_launcher as health_launcher
 
 
 class FakeDelayAPI:

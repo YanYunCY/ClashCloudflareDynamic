@@ -1,6 +1,12 @@
 ﻿#requires -Version 5.1
 $ErrorActionPreference = "Stop"
 
+$RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+$ReleaseRoot = Join-Path $RepositoryRoot "dist\ClashCloudflareDynamic"
+if (-not (Test-Path -LiteralPath $ReleaseRoot -PathType Container)) {
+    throw "缺少测试发布包；请先运行 python .\tools\build_release.py"
+}
+
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) {
         throw $Message
@@ -14,8 +20,8 @@ $TestRoot = Join-Path (
 try {
     $ExampleDir = Join-Path $TestRoot "examples"
     New-Item -ItemType Directory -Path $ExampleDir -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "setup.ps1") -Destination $TestRoot
-    Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot "examples") -File -Filter "*.json" |
+    Copy-Item -LiteralPath (Join-Path $ReleaseRoot "setup.ps1") -Destination $TestRoot
+    Get-ChildItem -LiteralPath (Join-Path $ReleaseRoot "examples") -File -Filter "*.json" |
         ForEach-Object {
             Copy-Item -LiteralPath $_.FullName -Destination $ExampleDir
         }

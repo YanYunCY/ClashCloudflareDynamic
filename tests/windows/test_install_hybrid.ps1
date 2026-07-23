@@ -1,6 +1,12 @@
 ﻿#requires -Version 5.1
 $ErrorActionPreference = "Stop"
 
+$RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+$ReleaseRoot = Join-Path $RepositoryRoot "dist\ClashCloudflareDynamic"
+if (-not (Test-Path -LiteralPath $ReleaseRoot -PathType Container)) {
+    throw "缺少测试发布包；请先运行 python .\tools\build_release.py"
+}
+
 function New-ScheduledTaskSettingsSet {
     [CmdletBinding()]
     param(
@@ -176,16 +182,16 @@ try {
     # contributor's ignored local credentials in the repository root.
     $TestSource = Join-Path $TestRoot "source"
     New-Item -ItemType Directory -Path $TestSource -Force | Out-Null
-    Get-ChildItem -LiteralPath $PSScriptRoot -File | Where-Object {
+    Get-ChildItem -LiteralPath $ReleaseRoot -File | Where-Object {
         $_.Name -notin @("settings.json", "node_template.json")
     } | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination $TestSource
     }
     Copy-Item `
-        -LiteralPath (Join-Path $PSScriptRoot "examples\settings.example.json") `
+        -LiteralPath (Join-Path $ReleaseRoot "examples\settings.example.json") `
         -Destination (Join-Path $TestSource "settings.json")
     Copy-Item `
-        -LiteralPath (Join-Path $PSScriptRoot "examples\node_template.example.json") `
+        -LiteralPath (Join-Path $ReleaseRoot "examples\node_template.example.json") `
         -Destination (Join-Path $TestSource "node_template.json")
     foreach ($RepositoryDirectory in @(".git", ".github", "examples", "tools")) {
         New-Item `
@@ -206,7 +212,7 @@ try {
     Assert-Equal $false (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA "ClashCloudflareDynamic")) "示例配置预检失败前已写入安装目录"
 
     Copy-Item `
-        -LiteralPath (Join-Path $PSScriptRoot "examples\node_template.trojan.example.json") `
+        -LiteralPath (Join-Path $ReleaseRoot "examples\node_template.trojan.example.json") `
         -Destination (Join-Path $TestSource "node_template.json") `
         -Force
     $TrojanExampleRejected = $false
@@ -237,7 +243,7 @@ try {
     Assert-Equal $true $UdpOnlyRejected "安装器未拒绝 TCP 初筛不兼容的 UDP 协议"
     Assert-Equal $false (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA "ClashCloudflareDynamic")) "UDP 协议预检失败前已写入安装目录"
     $VlessTestTemplate = [IO.File]::ReadAllText(
-        (Join-Path $PSScriptRoot "examples\node_template.vless.example.json")
+        (Join-Path $ReleaseRoot "examples\node_template.vless.example.json")
     ) | ConvertFrom-Json
     $VlessTestTemplate.port = 8443
     $VlessTestTemplate.uuid = "11111111-1111-4111-8111-111111111111"
@@ -498,7 +504,7 @@ try {
     )
     $global:ClashCloudflareDynamicTestUnregisteredTasks = @()
 
-    $AggressiveScript = Join-Path $PSScriptRoot "install_aggressive_5000_30min.ps1"
+    $AggressiveScript = Join-Path $ReleaseRoot "install_aggressive_5000_30min.ps1"
     $global:ClashCloudflareDynamicTestUnregisteredTasks = @()
     $global:ClashCloudflareDynamicTestFailAggressiveRegistration = $true
     $AggressiveFailureRaised = $false
@@ -571,14 +577,14 @@ try {
     if ($HealthRegistrationIndex -lt 0 -or $ObsoleteCleanupIndex -le $HealthRegistrationIndex) {
         throw "混合安装器在替代任务成功前清理旧任务"
     }
-    $UninstallText = [IO.File]::ReadAllText((Join-Path $PSScriptRoot "uninstall.ps1"))
+    $UninstallText = [IO.File]::ReadAllText((Join-Path $ReleaseRoot "uninstall.ps1"))
     foreach ($RequiredText in "Stop-ScheduledTask", "-ErrorAction Stop", "Clash Cloudflare Dynamic.lnk", "ClashCloudflareDynamic", "RemoveData") {
         if ($UninstallText -notlike "*$RequiredText*") {
             throw "卸载器缺少安全行为：$RequiredText"
         }
     }
 
-    . (Join-Path $PSScriptRoot "health_monitor.ps1")
+    . (Join-Path $ReleaseRoot "health_monitor.ps1")
     $Now = [DateTimeOffset]::Parse("2026-07-23T12:00:00+08:00")
     $HealthyState = New-HealthState $Now
     $HealthySnapshots = @(

@@ -402,9 +402,44 @@ function New-InitialProvider(
     Write-JsonUtf8NoBom $Path ([PSCustomObject]@{ proxies = $Nodes })
 }
 
-$Source = Split-Path -Parent $MyInvocation.MyCommand.Path
-$SourceSettingsPath = Join-Path $Source "settings.json"
-$SourceNodeTemplatePath = Join-Path $Source "node_template.json"
+function Resolve-RequiredSourceFile(
+    [string]$DisplayName,
+    [string[]]$CandidatePaths
+) {
+    foreach ($CandidatePath in $CandidatePaths) {
+        if (Test-Path -LiteralPath $CandidatePath -PathType Leaf) {
+            return [IO.Path]::GetFullPath($CandidatePath)
+        }
+    }
+    throw "安装源缺少 $DisplayName；已检查：$($CandidatePaths -join '；')"
+}
+
+$ScriptSourceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepositoryRootCandidate = [IO.Path]::GetFullPath(
+    (Join-Path $ScriptSourceDir "..\..")
+)
+$RepositoryCoreCandidate = Join-Path $RepositoryRootCandidate "src\clash_cloudflare_dynamic"
+$RepositoryScriptsCandidate = Join-Path $RepositoryRootCandidate "scripts\windows"
+$IsRepositoryLayout = (
+    [IO.Path]::GetFullPath($ScriptSourceDir).Equals(
+        [IO.Path]::GetFullPath($RepositoryScriptsCandidate),
+        [StringComparison]::OrdinalIgnoreCase
+    ) -and
+    (Test-Path -LiteralPath $RepositoryCoreCandidate -PathType Container) -and
+    (Test-Path -LiteralPath (Join-Path $RepositoryRootCandidate "examples") -PathType Container)
+)
+if ($IsRepositoryLayout) {
+    $SourceRoot = $RepositoryRootCandidate
+    $CoreSourceDir = $RepositoryCoreCandidate
+    $ConfigSourceDir = Join-Path $RepositoryRootCandidate "config"
+} else {
+    # tools/build_release.py produces this backward-compatible flat layout.
+    $SourceRoot = $ScriptSourceDir
+    $CoreSourceDir = $ScriptSourceDir
+    $ConfigSourceDir = $ScriptSourceDir
+}
+$SourceSettingsPath = Join-Path $SourceRoot "settings.json"
+$SourceNodeTemplatePath = Join-Path $SourceRoot "node_template.json"
 $SourceConfiguration = Assert-PublicConfigurationReady `
     -SettingsPath $SourceSettingsPath `
     -TemplatePath $SourceNodeTemplatePath
@@ -421,36 +456,50 @@ $LightTask = "Clash Cloudflare Light Scan 30min"
 $DeepTask = "Clash Cloudflare Deep Scan 5000 6h"
 $HealthTask = "Clash Cloudflare Health Monitor 30min"
 $AggressiveTask = "Clash Cloudflare Deep Scan 5000 30min"
-$RuntimeFileNames = @(
-    "config.template.yaml",
-    "deep_scan_5000.bat",
-    "diagnose.bat",
-    "dynamic_selector.py",
-    "health_monitor.ps1",
-    "health_monitor_launcher.py",
-    "install_aggressive_5000_30min.ps1",
-    "install_hybrid_5000.ps1",
-    "light_scan_200.bat",
-    "notify_windows.ps1",
-    "quick_test.bat",
-    "run_now.bat",
-    "seed_ips.txt",
-    "storage_maintenance.py",
-    "uninstall.ps1"
+$RuntimeFileSpecs = @(
+    @{ Name = "dynamic_selector.py"; Root = $CoreSourceDir },
+    @{ Name = "health_monitor_launcher.py"; Root = $CoreSourceDir },
+    @{ Name = "storage_maintenance.py"; Root = $CoreSourceDir },
+    @{ Name = "health_monitor.ps1"; Root = $ScriptSourceDir },
+    @{ Name = "install_aggressive_5000_30min.ps1"; Root = $ScriptSourceDir },
+    @{ Name = "install_hybrid_5000.ps1"; Root = $ScriptSourceDir },
+    @{ Name = "notify_windows.ps1"; Root = $ScriptSourceDir },
+    @{ Name = "uninstall.ps1"; Root = $ScriptSourceDir },
+    @{ Name = "deep_scan_5000.bat"; Root = $ScriptSourceDir },
+    @{ Name = "diagnose.bat"; Root = $ScriptSourceDir },
+    @{ Name = "light_scan_200.bat"; Root = $ScriptSourceDir },
+    @{ Name = "quick_test.bat"; Root = $ScriptSourceDir },
+    @{ Name = "run_now.bat"; Root = $ScriptSourceDir },
+    @{ Name = "config.template.yaml"; Root = $ConfigSourceDir },
+    @{ Name = "seed_ips.txt"; Root = $ConfigSourceDir }
 )
-$RuntimeFileNames | ForEach-Object {
-    $RuntimeSourcePath = Join-Path $Source $_
-    if (-not (Test-Path -LiteralPath $RuntimeSourcePath -PathType Leaf)) {
-        throw "安装源缺少运行时文件：$RuntimeSourcePath"
+$RuntimeSourceFiles = @(
+    $RuntimeFileSpecs | ForEach-Object {
+        $CandidatePaths = @((Join-Path $_.Root $_.Name))
+        $FlatFallbackPath = Join-Path $SourceRoot $_.Name
+        if ($CandidatePaths -notcontains $FlatFallbackPath) {
+            $CandidatePaths += $FlatFallbackPath
+        }
+        [PSCustomObject]@{
+            Name = $_.Name
+            SourcePath = Resolve-RequiredSourceFile `
+                -DisplayName "运行时文件 $($_.Name)" `
+                -CandidatePaths $CandidatePaths
+        }
     }
-}
-$SourceHealthScript = Join-Path $Source "health_monitor.ps1"
-if (-not (Test-Path -LiteralPath $SourceHealthScript -PathType Leaf)) {
-    throw "安装源缺少健康监控脚本：$SourceHealthScript"
-}
-$SourceHealthLauncher = Join-Path $Source "health_monitor_launcher.py"
-if (-not (Test-Path -LiteralPath $SourceHealthLauncher -PathType Leaf)) {
-    throw "安装源缺少健康监控隐藏启动器：$SourceHealthLauncher"
+)
+$RuntimeFileNames = @($RuntimeSourceFiles | ForEach-Object { $_.Name })
+$SeedSourcePath = @(
+    $RuntimeSourceFiles | Where-Object { $_.Name -eq "seed_ips.txt" }
+)[0].SourcePath
+$SourceHealthScript = @(
+    $RuntimeSourceFiles | Where-Object { $_.Name -eq "health_monitor.ps1" }
+)[0].SourcePath
+$SourceHealthLauncher = @(
+    $RuntimeSourceFiles | Where-Object { $_.Name -eq "health_monitor_launcher.py" }
+)[0].SourcePath
+if (-not $SourceHealthScript -or -not $SourceHealthLauncher) {
+    throw "安装源的健康监控组件解析失败。"
 }
 
 # Validate the task interpreter before creating directories, backups, or
@@ -579,9 +628,9 @@ if ($ExistingInstall -or $ExistingToastShortcut -or $ExistingManagedTaskNames.Co
 # 外层再恢复安装前的每个受管文件；从未存在的文件只删除本轮创建项。
 try {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    foreach ($RuntimeFileName in $RuntimeFileNames) {
-        $RuntimeSourcePath = Join-Path $Source $RuntimeFileName
-        $RuntimeDestinationPath = Join-Path $InstallDir $RuntimeFileName
+    foreach ($RuntimeSourceFile in $RuntimeSourceFiles) {
+        $RuntimeSourcePath = $RuntimeSourceFile.SourcePath
+        $RuntimeDestinationPath = Join-Path $InstallDir $RuntimeSourceFile.Name
         if (-not [IO.Path]::GetFullPath($RuntimeSourcePath).Equals(
             [IO.Path]::GetFullPath($RuntimeDestinationPath),
             [StringComparison]::OrdinalIgnoreCase
@@ -634,14 +683,14 @@ try {
             $ActiveProviderPath `
             "CF-A" `
             $NodeTemplatePath `
-            (Join-Path $Source "seed_ips.txt")
+            $SeedSourcePath
     }
     if (-not (Test-Path -LiteralPath $DiscoveryProviderPath)) {
         New-InitialProvider `
             $DiscoveryProviderPath `
             "CF-D" `
             $NodeTemplatePath `
-            (Join-Path $Source "seed_ips.txt")
+            $SeedSourcePath
     }
 
     $TemplatePath = Join-Path $InstallDir "config.template.yaml"
