@@ -23,6 +23,18 @@ tools/privacy_check.py         发布前隐私检查
 
 `python tools/build_release.py` 会根据显式白名单生成 `dist/ClashCloudflareDynamic.zip`。压缩包采用便于 Windows 计划任务运行的平铺结构；`dist/` 不进入 Git。安装后的文件结构与源码仓库结构因此是两套明确分离的布局。
 
+## 版本与下载
+
+具体版本的 Release 页面只展示该版本；全部历史版本请打开 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
+
+| 版本 | 状态 | 主要变化 | 下载 |
+| --- | --- | --- | --- |
+| `v1.0.2` | 最新稳定版 | 阶段漏斗、失败与名额未入选分离、失败报告 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.2) |
+| `v1.0.1` | 历史稳定版 | 协议与端口写入 CSV、决策 JSON 和报告 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.1) |
+| `v1.0.0` | 已被取代 | 首个公开版本，仅建议用于历史查阅 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.0) |
+
+逐版本变更记录见 [CHANGELOG.md](https://github.com/YanYunCY/ClashCloudflareDynamic/blob/main/CHANGELOG.md)。
+
 ## 主要功能
 
 - 每 30 分钟轻量扫描，默认最多发现 200 个新地址；
