@@ -189,6 +189,7 @@ try {
     Assert-True ($WizardText.Contains('MessageBoxIcon]::Warning')) "临时凭据清理失败没有显式警告"
 
     Write-Output "install wizard isolation tests: OK"
+    exit 0
 } finally {
     if (Test-Path -LiteralPath $TestRoot -PathType Container) {
         $ResolvedRoot = (Resolve-Path -LiteralPath $TestRoot).Path
