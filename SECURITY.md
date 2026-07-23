@@ -31,4 +31,5 @@ git status --ignored --short
 
 The privacy checker inspects ignored local configuration as well as publishable
 files, but reports only the file name and finding category. Build release
-archives from a reviewed Git commit instead of zipping a configured worktree.
+archives from a reviewed Git commit with `python tools/build_release.py`
+instead of zipping a configured worktree.
