@@ -1,0 +1,35 @@
+# Local credentials and generated Clash configuration
+settings.json
+node_template.json
+*.local.json
+clash_cloudflare_dynamic*.yaml
+
+# Runtime state and results
+logs/
+providers/
+backups/
+state.json
+dynamic_selector.lock
+discovery_history.sqlite3*
+cloudflare_ranges_cache.txt
+
+# Python/editor artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Local archives and temporary files
+*.zip
+*.tmp
+*.bak
+*.backup-*
+*.7z
+*.rar
+Thumbs.db
+.DS_Store
