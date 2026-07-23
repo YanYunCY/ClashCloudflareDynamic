@@ -2055,11 +2055,14 @@ def tcp_stage(
     return rows
 
 
-def write_discovery_log(rows: list[dict[str, Any]]) -> None:
+def write_discovery_log(
+    rows: list[dict[str, Any]], protocol: str = ""
+) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     fields = [
         "time",
         "ip",
+        "protocol",
         "port",
         "reachable",
         "tcp_ms",
@@ -2080,6 +2083,7 @@ def write_discovery_log(rows: list[dict[str, Any]]) -> None:
         ):
             item = dict(row)
             item["time"] = stamp
+            item["protocol"] = protocol
             writer.writerow(item)
 
 
@@ -2088,6 +2092,8 @@ def write_speed_probe_log(rows: list[dict[str, Any]]) -> None:
     fields = [
         "time",
         "ip",
+        "protocol",
+        "port",
         "node",
         "delay_ms",
         "speed_ok",
@@ -2456,6 +2462,8 @@ def write_latest(rows: list[dict[str, Any]]) -> None:
     fields = [
         "time",
         "ip",
+        "protocol",
+        "port",
         "discovery_node",
         "delay_ms",
         "delay_stddev_ms",
@@ -2494,26 +2502,29 @@ def append_history(
     ranked: list[dict[str, Any]], max_rows: int = 10_000
 ) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    fields = ["time", "ip", "delay_ms", "speed_Mbps", "score"]
-    exists = HISTORY_PATH.exists()
-    with HISTORY_PATH.open("a", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
-        if not exists:
-            writer.writeheader()
-        for row in ranked:
-            writer.writerow(row)
-
+    fields = [
+        "time",
+        "protocol",
+        "port",
+        "ip",
+        "delay_ms",
+        "speed_Mbps",
+        "score",
+    ]
     max_rows = max(100, int(max_rows))
     try:
-        with HISTORY_PATH.open("r", encoding="utf-8-sig", newline="") as f:
-            rows = list(csv.DictReader(f))
-        if len(rows) <= max_rows:
-            return
+        existing_rows: list[dict[str, Any]] = []
+        if HISTORY_PATH.exists():
+            with HISTORY_PATH.open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as f:
+                existing_rows = list(csv.DictReader(f))
+        rows = [*existing_rows, *ranked][-max_rows:]
         tmp = HISTORY_PATH.with_suffix(HISTORY_PATH.suffix + ".tmp")
         with tmp.open("w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
             writer.writeheader()
-            writer.writerows(rows[-max_rows:])
+            writer.writerows(rows)
         os.replace(tmp, HISTORY_PATH)
     except OSError as exc:
         log(f"裁剪历史 CSV 失败：{exc}")
@@ -2920,7 +2931,7 @@ def main() -> int:
 
         enter_stage(f"TCP {candidate_port} 初筛", "tcp_probe")
         tcp_rows = tcp_stage(candidates, settings, candidate_port)
-        write_discovery_log(tcp_rows)
+        write_discovery_log(tcp_rows, node_protocol)
         record_tcp_history(tcp_rows)
         reachable_count = sum(1 for x in tcp_rows if x["reachable"])
         timeout_counts["tcp_probe"] = sum(
@@ -3037,6 +3048,8 @@ def main() -> int:
             probe_row = {
                 "time": now_iso(),
                 "ip": ip,
+                "protocol": node_protocol,
+                "port": candidate_port,
                 "node": node_name,
                 "delay_ms": delays[node_name],
                 "speed_ok": bool(result.get("ok")),
@@ -3140,6 +3153,8 @@ def main() -> int:
                 {
                     "time": now_iso(),
                     "ip": ip,
+                    "protocol": node_protocol,
+                    "port": candidate_port,
                     "discovery_node": node_name,
                     "delay_ms": delays[node_name],
                     "delay_stddev_ms": delay_stddev.get(node_name, 0.0),
@@ -3259,6 +3274,8 @@ def main() -> int:
             "timeout_count_total": sum(timeout_counts.values()),
         }
         decision["scan_summary"] = summary
+        decision["node_protocol"] = node_protocol
+        decision["node_port"] = candidate_port
         save_json_atomic(STATE_PATH, state)
         save_json_atomic(DECISION_JSON, decision)
 

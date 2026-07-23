@@ -719,6 +719,8 @@ class TimeoutAndCsvTests(unittest.TestCase):
             row = {
                 "time": "2026-07-23T12:00:00+08:00",
                 "ip": "1.1.1.1",
+                "protocol": "vless",
+                "port": 8443,
                 "speed_samples_Mbps": "FAIL,SKIP,SKIP",
                 "successful_runs": 0,
                 "attempted_runs": 1,
@@ -738,6 +740,102 @@ class TimeoutAndCsvTests(unittest.TestCase):
         self.assertEqual(saved["skipped_runs"], "2")
         self.assertEqual(saved["timeout_runs"], "1")
         self.assertEqual(saved["speed_samples_Mbps"], "FAIL,SKIP,SKIP")
+        self.assertEqual(saved["protocol"], "vless")
+        self.assertEqual(saved["port"], "8443")
+
+    def test_discovery_and_probe_csv_include_protocol_and_port(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            discovery = root / "discovery.csv"
+            probe = root / "probe.csv"
+            with mock.patch.object(selector, "DISCOVERY_CSV", discovery):
+                selector.write_discovery_log(
+                    [
+                        {
+                            "ip": "1.1.1.1",
+                            "port": 2053,
+                            "reachable": True,
+                            "tcp_ms": 20,
+                            "successes": 1,
+                            "attempts": 1,
+                            "timeout_count": 0,
+                        }
+                    ],
+                    "trojan",
+                )
+            with mock.patch.object(selector, "SPEED_PROBE_CSV", probe):
+                selector.write_speed_probe_log(
+                    [
+                        {
+                            "time": "2026-07-23T12:00:00+08:00",
+                            "ip": "1.1.1.1",
+                            "protocol": "trojan",
+                            "port": 2053,
+                        }
+                    ]
+                )
+
+            with discovery.open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as stream:
+                discovery_row = next(csv.DictReader(stream))
+            with probe.open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as stream:
+                probe_row = next(csv.DictReader(stream))
+
+        self.assertEqual(discovery_row["protocol"], "trojan")
+        self.assertEqual(discovery_row["port"], "2053")
+        self.assertEqual(probe_row["protocol"], "trojan")
+        self.assertEqual(probe_row["port"], "2053")
+
+    def test_history_csv_migrates_context_columns(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            history = root / "history.csv"
+            history.write_text(
+                "time,ip,delay_ms,speed_Mbps,score\n"
+                "old,1.1.1.1,100,8.0,90\n",
+                encoding="utf-8",
+            )
+            with mock.patch.object(selector, "LOG_DIR", root), mock.patch.object(
+                selector, "HISTORY_PATH", history
+            ):
+                selector.append_history(
+                    [
+                        {
+                            "time": "new",
+                            "protocol": "vmess",
+                            "port": 443,
+                            "ip": "2.2.2.2",
+                            "delay_ms": 90,
+                            "speed_Mbps": 9.0,
+                            "score": 95,
+                        }
+                    ]
+                )
+            with history.open(
+                "r", encoding="utf-8-sig", newline=""
+            ) as stream:
+                reader = csv.DictReader(stream)
+                rows = list(reader)
+                fields = reader.fieldnames
+
+        self.assertEqual(
+            fields,
+            [
+                "time",
+                "protocol",
+                "port",
+                "ip",
+                "delay_ms",
+                "speed_Mbps",
+                "score",
+            ],
+        )
+        self.assertEqual(rows[0]["protocol"], "")
+        self.assertEqual(rows[1]["protocol"], "vmess")
+        self.assertEqual(rows[1]["port"], "443")
 
 
 class RankingTests(unittest.TestCase):

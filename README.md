@@ -31,6 +31,7 @@ tools/privacy_check.py         发布前隐私检查
 - 真实代理链路验证，不以裸 IP 的 HTTP 测速代替节点验证；
 - VMess、VLESS、Trojan 示例和自定义 Mihomo 节点模板；
 - TCP 初筛自动跟随节点模板端口，不再写死为 443；
+- 发现、粗测、正式测速 CSV、决策 JSON 和通知报告记录协议与端口；
 - 每个最终候选连续测试 3 次，记录原始值、平均值、标准差和 CV；
 - 在最高平均速度 95% 的高速组中选择平均延迟最低节点；
 - provider 原子更新、`.last-good` 回滚和 Mihomo 状态确认；
