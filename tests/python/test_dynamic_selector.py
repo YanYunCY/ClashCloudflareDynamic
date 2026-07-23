@@ -1392,6 +1392,154 @@ class DeepScanDeferralTests(unittest.TestCase):
 
 
 class NotificationTests(unittest.TestCase):
+    @staticmethod
+    def _stage_funnel_summary():
+        return {
+            "candidate_count": 101,
+            "tcp_reachable_count": 89,
+            "tcp_failed_count": 12,
+            "discovery_pool_count": 71,
+            "discovery_not_selected_count": 18,
+            "proxy_valid_count": 61,
+            "proxy_failed_count": 10,
+            "speed_probe_selected_count": 53,
+            "speed_probe_attempted_count": 53,
+            "speed_probe_passed_count": 45,
+            "speed_probe_failed_count": 8,
+            "speed_probe_not_selected_count": 8,
+            "speed_probe_selected_not_attempted_count": 0,
+            "formal_selected_count": 31,
+            "speed_attempted_count": 31,
+            "speed_passed_count": 31,
+            "formal_failed_count": 0,
+            "formal_not_selected_count": 14,
+            "formal_selected_not_attempted_count": 0,
+            "fast_group_count": 19,
+            "outside_fast_group_count": 12,
+            "active_pool_size": 24,
+            "new_active_count": 5,
+            "pool_size_delta": 0,
+            "failed_count": 30,
+            "duration_seconds": 125,
+        }
+
+    def test_stage_funnel_counts_keep_failures_and_capacity_exclusions_distinct(self):
+        counts = selector.normalize_scan_summary_counts(
+            self._stage_funnel_summary()
+        )
+
+        expected = {
+            "tcp_failed_count": 12,
+            "discovery_not_selected_count": 18,
+            "proxy_failed_count": 10,
+            "speed_probe_selected_count": 53,
+            "speed_probe_attempted_count": 53,
+            "speed_probe_failed_count": 8,
+            "speed_probe_not_selected_count": 8,
+            "speed_probe_selected_not_attempted_count": 0,
+            "formal_selected_count": 31,
+            "formal_failed_count": 0,
+            "formal_not_selected_count": 14,
+            "formal_selected_not_attempted_count": 0,
+            "fast_group_count": 19,
+            "outside_fast_group_count": 12,
+        }
+        self.assertEqual(
+            {key: counts[key] for key in expected},
+            expected,
+        )
+        self.assertEqual(
+            counts["failed_count"],
+            counts["tcp_failed_count"]
+            + counts["proxy_failed_count"]
+            + counts["speed_probe_failed_count"]
+            + counts["formal_failed_count"],
+        )
+        self.assertNotEqual(
+            counts["failed_count"],
+            counts["discovery_not_selected_count"]
+            + counts["speed_probe_not_selected_count"]
+            + counts["formal_not_selected_count"]
+            + counts["outside_fast_group_count"],
+        )
+        self.assertEqual(
+            counts["candidate_count"],
+            counts["tcp_reachable_count"] + counts["tcp_failed_count"],
+        )
+        self.assertEqual(
+            counts["tcp_reachable_count"],
+            counts["discovery_pool_count"]
+            + counts["discovery_not_selected_count"],
+        )
+        self.assertEqual(
+            counts["proxy_valid_count"],
+            counts["speed_probe_selected_count"]
+            + counts["speed_probe_not_selected_count"],
+        )
+        self.assertEqual(
+            counts["speed_probe_selected_count"],
+            counts["speed_probe_attempted_count"]
+            + counts["speed_probe_selected_not_attempted_count"],
+        )
+        self.assertEqual(
+            counts["speed_probe_passed_count"],
+            counts["formal_selected_count"]
+            + counts["formal_not_selected_count"],
+        )
+        self.assertEqual(
+            counts["formal_passed_count"],
+            counts["fast_group_count"] + counts["outside_fast_group_count"],
+        )
+
+    def test_selected_but_unexecuted_nodes_are_reported_separately(self):
+        summary = self._stage_funnel_summary()
+        summary.update(
+            {
+                "speed_probe_selected_count": 55,
+                "speed_probe_attempted_count": 53,
+                "speed_probe_selected_not_attempted_count": 2,
+                "speed_probe_not_selected_count": 6,
+                "formal_selected_count": 32,
+                "formal_attempted_count": 31,
+                "formal_selected_not_attempted_count": 1,
+                "formal_not_selected_count": 13,
+            }
+        )
+
+        self.assertIn(
+            "已选未执行：粗测 2，正式 1",
+            selector.format_scan_funnel_lines(summary),
+        )
+
+    def test_legacy_summary_does_not_invent_probe_counts(self):
+        _, message = selector.build_scan_notification(
+            {
+                "current_ip_before": "192.0.2.1",
+                "switched": False,
+                "current_metrics": {"speed_Mbps": 9, "delay_ms": 30},
+                "best": {"ip": "192.0.2.1", "speed_Mbps": 9, "delay_ms": 30},
+            },
+            quick=True,
+            summary={
+                "candidate_count": 500,
+                "tcp_reachable_count": 250,
+                "discovery_pool_count": 120,
+                "proxy_valid_count": 100,
+                "speed_attempted_count": 3,
+                "speed_passed_count": 2,
+                "active_pool_size": 40,
+                "pool_size_delta": 0,
+                "failed_count": 1,
+            },
+        )
+
+        self.assertIn(
+            "本轮：候选 500，TCP 250/500，链路 100/120，测速 2/3",
+            message,
+        )
+        self.assertNotIn("粗测 0/0", message)
+        self.assertNotIn("高速组外", message)
+
     def test_html_report_is_unique_complete_and_escaped(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             report_dir = Path(temp_dir) / "notification_reports"
@@ -1524,6 +1672,123 @@ class NotificationTests(unittest.TestCase):
             self.assertTrue(recent_report.exists())
             self.assertTrue(unrelated.exists())
 
+    def test_html_report_separates_funnel_failures_and_capacity_exclusions(self):
+        summary = self._stage_funnel_summary()
+        summary["fast_speed_ratio"] = 0.90
+        ranked = [
+            {
+                "ip": f"192.0.2.{index}",
+                "fast_group": index <= summary["fast_group_count"],
+                "speed_Mbps": 100 - index,
+                "delay_ms": 20 + index,
+            }
+            for index in range(1, summary["speed_passed_count"] + 1)
+        ]
+        decision = {
+            "current_ip_before": ranked[0]["ip"],
+            "current_ip_after": ranked[0]["ip"],
+            "switched": False,
+            "current_metrics": ranked[0],
+            "best": ranked[0],
+            "reason": "当前节点仍是高速组内最低延迟",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with mock.patch.object(
+                selector,
+                "NOTIFICATION_REPORT_DIR",
+                Path(temp_dir) / "notification_reports",
+            ):
+                report = selector.create_notification_report(
+                    "扫描完成",
+                    "阶段漏斗已更新",
+                    decision=decision,
+                    summary=summary,
+                    ranked=ranked,
+                    failed_rows=[],
+                )
+            document = report.read_text(encoding="utf-8")
+
+        expected_rows = [
+            (
+                "TCP 初筛",
+                (101, 89, 12, 0, 18),
+                "TCP 可达但未进入发现池",
+            ),
+            (
+                "真实代理链路",
+                (71, 61, 10, 0, 8),
+                "链路有效但未进入速度粗测",
+            ),
+            (
+                "速度粗测",
+                (53, 45, 8, 0, 14),
+                "粗测通过但未进入正式测速",
+            ),
+            (
+                "正式三轮测速",
+                (31, 31, 0, 0, 12),
+                "未达到最高平均速度的 90%（高速组外，非失败）",
+            ),
+        ]
+        for label, values, note in expected_rows:
+            cells = "".join(f"<td>{value}</td>" for value in values)
+            self.assertIn(
+                f'<th scope="row">{label}</th>{cells}<td>{note}</td>',
+                document,
+            )
+        self.assertIn("<h2>正式三轮测速淘汰（0）", document)
+        self.assertIn(
+            '<div class="success">本轮正式测速 31/31 全部通过</div>',
+            document,
+        )
+        self.assertIn(
+            "无正式测速淘汰项；此处不包含前序阶段失败或因名额限制未入选的 IP",
+            document,
+        )
+        self.assertNotIn('<div class="warning">', document)
+
+    def test_notification_keeps_failures_and_capacity_exclusions_distinct(self):
+        _, message = selector.build_scan_notification(
+            {
+                "current_ip_before": "192.0.2.1",
+                "switched": False,
+                "current_metrics": {
+                    "ip": "192.0.2.1",
+                    "speed_Mbps": 99,
+                    "delay_ms": 21,
+                },
+                "best": {
+                    "ip": "192.0.2.1",
+                    "speed_Mbps": 99,
+                    "delay_ms": 21,
+                },
+            },
+            quick=True,
+            summary=self._stage_funnel_summary(),
+        )
+
+        message_lines = message.splitlines()
+        self.assertIn(
+            "流程：101 → TCP 89 → 代理 61 → "
+            "粗测 45/53 → 正式 31/31",
+            message_lines,
+        )
+        funnel_lines = [
+            line
+            for line in message_lines
+            if line.startswith(("失败：", "名额未入选："))
+        ]
+        self.assertEqual(
+            funnel_lines,
+            [
+                "失败：TCP 12，代理 10，粗测 8，正式 0",
+                "名额未入选：TCP 后 18，代理后 8，粗测后 14；"
+                "高速组外 12（非失败）",
+            ],
+        )
+        self.assertNotIn("淘汰 30", "\n".join(funnel_lines))
+
     def test_switched_notification_contains_both_ips_and_metrics(self):
         title, message = selector.build_scan_notification(
             {
@@ -1571,20 +1836,47 @@ class NotificationTests(unittest.TestCase):
                 "node_port": 8443,
                 "candidate_count": 500,
                 "tcp_reachable_count": 250,
+                "tcp_failed_count": 250,
                 "proxy_valid_count": 100,
                 "discovery_pool_count": 120,
+                "discovery_not_selected_count": 130,
+                "proxy_failed_count": 20,
+                "speed_probe_attempted_count": 24,
+                "speed_probe_passed_count": 20,
+                "speed_probe_failed_count": 4,
+                "speed_probe_not_selected_count": 76,
                 "speed_passed_count": 2,
                 "speed_attempted_count": 3,
+                "formal_failed_count": 1,
+                "formal_not_selected_count": 17,
+                "fast_group_count": 2,
+                "outside_fast_group_count": 0,
                 "active_pool_size": 40,
                 "new_active_count": 4,
                 "pool_size_delta": 2,
-                "failed_count": 1,
+                "failed_count": 275,
                 "duration_seconds": 125,
             },
         )
         self.assertIn("入口：trojan / TCP 8443", message)
-        self.assertIn("本轮：候选 500，TCP 250/500，链路 100/120，测速 2/3", message)
-        self.assertIn("正式池 40（新入 4，变化 +2），淘汰 1，耗时 2分05秒", message)
+        self.assertIn(
+            "流程：500 → TCP 250 → 代理 100 → "
+            "粗测 20/24 → 正式 2/3",
+            message,
+        )
+        self.assertIn(
+            "失败：TCP 250，代理 20，粗测 4，正式 1",
+            message,
+        )
+        self.assertIn(
+            "名额未入选：TCP 后 130，代理后 76，粗测后 17；"
+            "高速组外 0（非失败）",
+            message,
+        )
+        self.assertIn(
+            "正式池 40（新入 4，变化 +2），各阶段失败 275，耗时 2分05秒",
+            message,
+        )
 
     def test_unchanged_notification_contains_current_candidate_and_reason(self):
         reason = "候选只连续胜出 1/2 轮，暂不切换"

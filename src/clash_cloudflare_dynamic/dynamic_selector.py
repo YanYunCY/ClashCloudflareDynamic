@@ -487,6 +487,149 @@ def _html_percent(value: Any, digits: int = 1) -> str:
     return f"{number:.{digits}f}%" if math.isfinite(number) else "-"
 
 
+def _nonnegative_count(value: Any) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def has_detailed_scan_summary(summary: dict[str, Any] | None) -> bool:
+    if not isinstance(summary, dict):
+        return False
+    if _nonnegative_count(summary.get("summary_schema_version")) >= 2:
+        return True
+    return any(
+        key in summary
+        for key in (
+            "tcp_failed_count",
+            "discovery_not_selected_count",
+            "proxy_failed_count",
+            "speed_probe_attempted_count",
+            "speed_probe_passed_count",
+            "formal_attempted_count",
+            "formal_passed_count",
+        )
+    )
+
+
+def normalize_scan_summary_counts(summary: dict[str, Any] | None) -> dict[str, int]:
+    """Return consistent stage-funnel counts, including legacy summary fallbacks."""
+    data = summary if isinstance(summary, dict) else {}
+
+    def explicit_or_derived(key: str, derived: int) -> int:
+        if key in data:
+            return _nonnegative_count(data.get(key))
+        return max(0, derived)
+
+    candidate_count = _nonnegative_count(data.get("candidate_count"))
+    tcp_reachable_count = _nonnegative_count(data.get("tcp_reachable_count"))
+    tcp_failed_count = explicit_or_derived(
+        "tcp_failed_count", candidate_count - tcp_reachable_count
+    )
+    discovery_pool_count = _nonnegative_count(data.get("discovery_pool_count"))
+    discovery_not_selected_count = explicit_or_derived(
+        "discovery_not_selected_count",
+        tcp_reachable_count - discovery_pool_count,
+    )
+    proxy_valid_count = _nonnegative_count(
+        data.get("proxy_valid_count", data.get("vm_valid_count", 0))
+    )
+    proxy_failed_count = explicit_or_derived(
+        "proxy_failed_count", discovery_pool_count - proxy_valid_count
+    )
+    speed_probe_attempted_count = _nonnegative_count(
+        data.get("speed_probe_attempted_count")
+    )
+    speed_probe_selected_count = _nonnegative_count(
+        data.get("speed_probe_selected_count", speed_probe_attempted_count)
+    )
+    speed_probe_passed_count = _nonnegative_count(
+        data.get("speed_probe_passed_count")
+    )
+    speed_probe_failed_count = explicit_or_derived(
+        "speed_probe_failed_count",
+        speed_probe_attempted_count - speed_probe_passed_count,
+    )
+    speed_probe_not_selected_count = explicit_or_derived(
+        "speed_probe_not_selected_count",
+        (
+            proxy_valid_count - speed_probe_selected_count
+            if "speed_probe_selected_count" in data
+            or "speed_probe_attempted_count" in data
+            else 0
+        ),
+    )
+    speed_probe_selected_not_attempted_count = explicit_or_derived(
+        "speed_probe_selected_not_attempted_count",
+        speed_probe_selected_count - speed_probe_attempted_count,
+    )
+    formal_attempted_count = _nonnegative_count(
+        data.get("formal_attempted_count", data.get("speed_attempted_count", 0))
+    )
+    formal_selected_count = _nonnegative_count(
+        data.get("formal_selected_count", formal_attempted_count)
+    )
+    formal_passed_count = _nonnegative_count(
+        data.get("formal_passed_count", data.get("speed_passed_count", 0))
+    )
+    formal_failed_count = explicit_or_derived(
+        "formal_failed_count", formal_attempted_count - formal_passed_count
+    )
+    formal_not_selected_count = explicit_or_derived(
+        "formal_not_selected_count",
+        (
+            speed_probe_passed_count - formal_selected_count
+            if "speed_probe_passed_count" in data
+            else 0
+        ),
+    )
+    formal_selected_not_attempted_count = explicit_or_derived(
+        "formal_selected_not_attempted_count",
+        formal_selected_count - formal_attempted_count,
+    )
+    fast_group_count = _nonnegative_count(data.get("fast_group_count"))
+    outside_fast_group_count = explicit_or_derived(
+        "outside_fast_group_count",
+        formal_passed_count - fast_group_count if "fast_group_count" in data else 0,
+    )
+    failed_count = explicit_or_derived(
+        "failed_count",
+        tcp_failed_count
+        + proxy_failed_count
+        + speed_probe_failed_count
+        + formal_failed_count,
+    )
+    return {
+        "candidate_count": candidate_count,
+        "tcp_reachable_count": tcp_reachable_count,
+        "tcp_failed_count": tcp_failed_count,
+        "discovery_pool_count": discovery_pool_count,
+        "discovery_not_selected_count": discovery_not_selected_count,
+        "proxy_valid_count": proxy_valid_count,
+        "proxy_failed_count": proxy_failed_count,
+        "speed_probe_selected_count": speed_probe_selected_count,
+        "speed_probe_attempted_count": speed_probe_attempted_count,
+        "speed_probe_passed_count": speed_probe_passed_count,
+        "speed_probe_failed_count": speed_probe_failed_count,
+        "speed_probe_not_selected_count": speed_probe_not_selected_count,
+        "speed_probe_selected_not_attempted_count": (
+            speed_probe_selected_not_attempted_count
+        ),
+        "formal_selected_count": formal_selected_count,
+        "formal_attempted_count": formal_attempted_count,
+        "formal_passed_count": formal_passed_count,
+        "formal_failed_count": formal_failed_count,
+        "formal_not_selected_count": formal_not_selected_count,
+        "formal_selected_not_attempted_count": (
+            formal_selected_not_attempted_count
+        ),
+        "fast_group_count": fast_group_count,
+        "outside_fast_group_count": outside_fast_group_count,
+        "failed_count": failed_count,
+    }
+
+
 def _report_metric_row(label: str, row: dict[str, Any] | None) -> str:
     data = row or {}
     return (
@@ -536,27 +679,118 @@ def create_notification_report(
     )
     after_metrics = best if decision.get("switched") else current_metrics
 
-    summary_labels = [
-        ("协议", "node_protocol"),
-        ("端口", "node_port"),
-        ("候选", "candidate_count"),
-        ("TCP 可达", "tcp_reachable_count"),
-        ("发现池", "discovery_pool_count"),
-        ("发现池新 IP", "discovery_new_count"),
-        ("链路有效", "proxy_valid_count"),
-        ("测速通过", "speed_passed_count"),
-        ("测速尝试", "speed_attempted_count"),
-        ("超时", "timeout_count_total"),
-        ("正式池", "active_pool_size"),
-        ("本轮新入", "new_active_count"),
-        ("池大小变化", "pool_size_delta"),
-        ("淘汰 IP", "failed_count"),
-        ("前台延后", "deferred_count"),
-    ]
+    counts = normalize_scan_summary_counts(summary)
+    detailed_summary = has_detailed_scan_summary(summary)
+    display_summary = {**summary, **counts}
+    summary_labels = (
+        [
+            ("协议", "node_protocol"),
+            ("端口", "node_port"),
+            ("候选", "candidate_count"),
+            ("TCP 可达", "tcp_reachable_count"),
+            ("发现池", "discovery_pool_count"),
+            ("发现池新 IP", "discovery_new_count"),
+            ("链路有效", "proxy_valid_count"),
+            ("粗测入选", "speed_probe_selected_count"),
+            ("粗测通过", "speed_probe_passed_count"),
+            ("粗测尝试", "speed_probe_attempted_count"),
+            ("正式入选", "formal_selected_count"),
+            ("正式通过", "formal_passed_count"),
+            ("正式尝试", "formal_attempted_count"),
+            ("高速组", "fast_group_count"),
+            ("超时", "timeout_count_total"),
+            ("正式池", "active_pool_size"),
+            ("本轮新入", "new_active_count"),
+            ("池大小变化", "pool_size_delta"),
+            ("各阶段失败 IP", "failed_count"),
+            ("前台延后", "deferred_count"),
+        ]
+        if detailed_summary
+        else [
+            ("协议", "node_protocol"),
+            ("端口", "node_port"),
+            ("候选", "candidate_count"),
+            ("TCP 可达", "tcp_reachable_count"),
+            ("发现池", "discovery_pool_count"),
+            ("发现池新 IP", "discovery_new_count"),
+            ("链路有效", "proxy_valid_count"),
+            ("正式通过", "formal_passed_count"),
+            ("正式尝试", "formal_attempted_count"),
+            ("超时", "timeout_count_total"),
+            ("正式池", "active_pool_size"),
+            ("本轮新入", "new_active_count"),
+            ("池大小变化", "pool_size_delta"),
+            ("各阶段失败 IP", "failed_count"),
+            ("前台延后", "deferred_count"),
+        ]
+    )
     summary_html = "".join(
         f"<div class=\"stat\"><dt>{_html_text(label)}</dt>"
-        f"<dd>{_html_text(summary.get(key, 0))}</dd></div>"
+        f"<dd>{_html_text(display_summary.get(key, 0))}</dd></div>"
         for label, key in summary_labels
+    )
+    funnel_rows = "".join(
+        "<tr>"
+        f"<th scope=\"row\">{_html_text(label)}</th>"
+        f"<td>{entered}</td><td>{passed}</td><td>{failed}</td>"
+        f"<td>{not_attempted}</td><td>{not_selected}</td>"
+        f"<td>{_html_text(note)}</td>"
+        "</tr>"
+        for label, entered, passed, failed, not_attempted, not_selected, note in [
+            (
+                "TCP 初筛",
+                counts["candidate_count"],
+                counts["tcp_reachable_count"],
+                counts["tcp_failed_count"],
+                0,
+                counts["discovery_not_selected_count"],
+                "TCP 可达但未进入发现池",
+            ),
+            (
+                "真实代理链路",
+                counts["discovery_pool_count"],
+                counts["proxy_valid_count"],
+                counts["proxy_failed_count"],
+                0,
+                counts["speed_probe_not_selected_count"],
+                "链路有效但未进入速度粗测",
+            ),
+            (
+                "速度粗测",
+                counts["speed_probe_selected_count"],
+                counts["speed_probe_passed_count"],
+                counts["speed_probe_failed_count"],
+                counts["speed_probe_selected_not_attempted_count"],
+                counts["formal_not_selected_count"],
+                "粗测通过但未进入正式测速",
+            ),
+            (
+                "正式三轮测速",
+                counts["formal_selected_count"],
+                counts["formal_passed_count"],
+                counts["formal_failed_count"],
+                counts["formal_selected_not_attempted_count"],
+                counts["outside_fast_group_count"],
+                (
+                    "未达到最高平均速度的 "
+                    f"{normalize_fast_speed_ratio(summary.get('fast_speed_ratio', 0.95)):.0%}"
+                    "（高速组外，非失败）"
+                ),
+            ),
+        ]
+    )
+    funnel_section = (
+        '<h2>阶段漏斗</h2><div class="table-wrap"><table>'
+        '<thead><tr><th>阶段</th><th>入选</th><th>通过</th>'
+        '<th>阶段失败</th><th>已选未执行</th>'
+        '<th>通过后未进入下一阶段（已包含于通过）</th><th>说明</th></tr></thead>'
+        f'<tbody>{funnel_rows}</tbody></table></div>'
+        if detailed_summary
+        else (
+            '<h2>阶段漏斗</h2><div class="reason">'
+            "本轮摘要来自旧版数据，未记录完整的粗测与名额未入选统计。"
+            "</div>"
+        )
     )
     raw_stage_durations = summary.get("stage_durations_seconds", {})
     if not isinstance(raw_stage_durations, dict):
@@ -621,7 +855,26 @@ def create_notification_report(
             "</tr>"
         )
     if not rejected_rows:
-        rejected_rows.append('<tr><td colspan="12" class="empty">无正式测速淘汰项</td></tr>')
+        rejected_rows.append(
+            '<tr><td colspan="12" class="empty">'
+            "无正式测速淘汰项；此处不包含前序阶段失败或因名额限制未入选的 IP"
+            "</td></tr>"
+        )
+
+    formal_status = ""
+    if counts["formal_attempted_count"] > 0:
+        if counts["formal_failed_count"] == 0:
+            formal_status = (
+                '<div class="success">本轮正式测速 '
+                f'{counts["formal_passed_count"]}/{counts["formal_attempted_count"]} '
+                "全部通过</div>"
+            )
+        else:
+            formal_status = (
+                '<div class="warning">本轮正式测速 '
+                f'{counts["formal_passed_count"]}/{counts["formal_attempted_count"]} '
+                f'通过，正式淘汰 {counts["formal_failed_count"]}</div>'
+            )
 
     reason = decision.get("reason") or "-"
     duration = format_duration(summary.get("duration_seconds"))
@@ -649,8 +902,10 @@ def create_notification_report(
     th, td {{ padding: 9px 10px; border-bottom: 1px solid #e5e9ed; text-align: left; white-space: nowrap; }}
     th {{ background: #edf1f4; font-weight: 650; }}
     code {{ font-family: Consolas, monospace; }}
-    .reason {{ padding: 12px 14px; background: #fff; border: 1px solid #d5dce3; }}
-    @media (prefers-color-scheme: dark) {{ body {{ background: #15191d; color: #edf2f7; }} .notice,.stat,.table-wrap,.reason {{ background:#20262c; border-color:#3b4650; }} th {{ background:#2b333b; }} th,td {{ border-color:#3b4650; }} .meta,.empty,dt {{ color:#aebac5; }} }}
+    .reason, .success, .warning {{ padding: 12px 14px; background: #fff; border: 1px solid #d5dce3; }}
+    .success {{ margin: 10px 0; border-left: 4px solid #238636; color: #116329; }}
+    .warning {{ margin: 10px 0; border-left: 4px solid #d29922; color: #7d4e00; }}
+    @media (prefers-color-scheme: dark) {{ body {{ background: #15191d; color: #edf2f7; }} .notice,.stat,.table-wrap,.reason,.success,.warning {{ background:#20262c; border-color:#3b4650; }} .success {{ color:#7ee787; }} .warning {{ color:#e3b341; }} th {{ background:#2b333b; }} th,td {{ border-color:#3b4650; }} .meta,.empty,dt {{ color:#aebac5; }} }}
   </style>
 </head>
 <body><main>
@@ -658,6 +913,7 @@ def create_notification_report(
   <div class="meta">{_html_text(timestamp.strftime('%Y-%m-%d %H:%M:%S %z'))} · 耗时 {_html_text(duration)}</div>
   <div class="notice">{_html_text(message)}</div>
   <h2>本轮概览</h2><dl class="stats">{summary_html}</dl>
+  {funnel_section}
   <h2>阶段耗时</h2><div class="table-wrap"><table>
     <thead><tr><th>阶段</th><th>耗时</th><th>超时次数</th></tr></thead>
     <tbody>{stage_rows}</tbody>
@@ -671,7 +927,7 @@ def create_notification_report(
     <thead><tr><th>#</th><th>IP</th><th>高速组</th><th>平均速度 Mbps</th><th>三次速度 Mbps</th><th>速度 σ</th><th>速度 CV</th><th>平均延迟 ms</th><th>三次延迟 ms</th><th>延迟 σ</th></tr></thead>
     <tbody>{''.join(ranking_rows)}</tbody>
   </table></div>
-  <h2>正式测速淘汰</h2><div class="table-wrap"><table>
+  <h2>正式三轮测速淘汰（{counts["formal_failed_count"]}）——仅统计已进入正式测速的节点</h2>{formal_status}<div class="table-wrap"><table>
     <thead><tr><th>IP</th><th>平均延迟 ms</th><th>三次延迟 ms</th><th>延迟 σ</th><th>成功轮次平均速度 Mbps</th><th>三次速度 Mbps</th><th>速度 σ</th><th>速度 CV</th><th>三次 TTFB ms</th><th>成功/执行/计划</th><th>失败轮次</th><th>淘汰原因</th></tr></thead>
     <tbody>{''.join(rejected_rows)}</tbody>
   </table></div>
@@ -761,6 +1017,43 @@ def format_notification_comparison(
     )
 
 
+def format_scan_funnel_lines(summary: dict[str, Any]) -> list[str]:
+    counts = normalize_scan_summary_counts(summary)
+    lines = [
+        "流程：{candidates} → TCP {tcp} → 代理 {proxy} → "
+        "粗测 {probe_passed}/{probe_attempted} → "
+        "正式 {formal_passed}/{formal_attempted}".format(
+            candidates=counts["candidate_count"],
+            tcp=counts["tcp_reachable_count"],
+            proxy=counts["proxy_valid_count"],
+            probe_passed=counts["speed_probe_passed_count"],
+            probe_attempted=counts["speed_probe_attempted_count"],
+            formal_passed=counts["formal_passed_count"],
+            formal_attempted=counts["formal_attempted_count"],
+        ),
+        "失败：TCP {tcp}，代理 {proxy}，粗测 {probe}，正式 {formal}".format(
+            tcp=counts["tcp_failed_count"],
+            proxy=counts["proxy_failed_count"],
+            probe=counts["speed_probe_failed_count"],
+            formal=counts["formal_failed_count"],
+        ),
+        "名额未入选：TCP 后 {tcp}，代理后 {proxy}，粗测后 {probe}；"
+        "高速组外 {outside}（非失败）".format(
+            tcp=counts["discovery_not_selected_count"],
+            proxy=counts["speed_probe_not_selected_count"],
+            probe=counts["formal_not_selected_count"],
+            outside=counts["outside_fast_group_count"],
+        ),
+    ]
+    probe_not_attempted = counts["speed_probe_selected_not_attempted_count"]
+    formal_not_attempted = counts["formal_selected_not_attempted_count"]
+    if probe_not_attempted or formal_not_attempted:
+        lines.append(
+            f"已选未执行：粗测 {probe_not_attempted}，正式 {formal_not_attempted}"
+        )
+    return lines
+
+
 def build_scan_notification(
     decision: dict[str, Any],
     quick: bool,
@@ -809,26 +1102,35 @@ def build_scan_notification(
             lines.append(
                 f"入口：{summary['node_protocol']} / TCP {summary['node_port']}"
             )
-        lines.append(
-            "本轮：候选 {candidates}，TCP {tcp}/{candidates}，"
-            "链路 {proxy}/{discovery}，"
-            "测速 {passed}/{attempted}，发现池新 IP {new_discovery}".format(
-                candidates=summary.get("candidate_count", 0),
-                tcp=summary.get("tcp_reachable_count", 0),
-                proxy=summary.get("proxy_valid_count", 0),
-                discovery=summary.get("discovery_pool_count", 0),
-                passed=summary.get("speed_passed_count", 0),
-                attempted=summary.get("speed_attempted_count", 0),
-                new_discovery=summary.get("discovery_new_count", 0),
+        counts = normalize_scan_summary_counts(summary)
+        if has_detailed_scan_summary(summary):
+            lines.extend(format_scan_funnel_lines(summary))
+        else:
+            lines.append(
+                "本轮：候选 {candidates}，TCP {tcp}/{candidates}，"
+                "链路 {proxy}/{discovery}，"
+                "测速 {passed}/{attempted}，发现池新 IP {new_discovery}".format(
+                    candidates=counts["candidate_count"],
+                    tcp=counts["tcp_reachable_count"],
+                    proxy=counts["proxy_valid_count"],
+                    discovery=counts["discovery_pool_count"],
+                    passed=counts["formal_passed_count"],
+                    attempted=counts["formal_attempted_count"],
+                    new_discovery=summary.get("discovery_new_count", 0),
+                )
             )
-        )
         lines.append(
             "正式池 {pool}（新入 {new_count}，变化 {delta:+d}），"
-            "淘汰 {failed}，耗时 {duration}".format(
+            "{failed_label} {failed}，耗时 {duration}".format(
                 pool=summary.get("active_pool_size", 0),
                 new_count=summary.get("new_active_count", 0),
                 delta=int(summary.get("pool_size_delta", 0)),
-                failed=summary.get("failed_count", 0),
+                failed_label=(
+                    "各阶段失败"
+                    if has_detailed_scan_summary(summary)
+                    else "淘汰"
+                ),
+                failed=counts["failed_count"],
                 duration=format_duration(summary.get("duration_seconds")),
             )
         )
@@ -2781,6 +3083,12 @@ def main() -> int:
     args = parser.parse_args()
 
     lock_handle: Any | None = None
+    settings: dict[str, Any] = {}
+    failed_ips: set[str] = set()
+    failure_summary: dict[str, Any] = {}
+    failure_ranked: list[dict[str, Any]] = []
+    failure_rows: list[dict[str, Any]] = []
+    current_ip = ""
     run_started = time.monotonic()
     stage = "加载配置"
     deferred_count = 0
@@ -2835,6 +3143,13 @@ def main() -> int:
         enter_stage("加载模板", "maintenance")
         template = load_template()
         node_protocol, candidate_port = template_endpoint(template)
+        failure_summary.update(
+            {
+                "summary_schema_version": 2,
+                "node_protocol": node_protocol,
+                "node_port": candidate_port,
+            }
+        )
         log(
             f"节点模板：协议 {node_protocol}，"
             f"TCP 端口 {candidate_port}"
@@ -2923,6 +3238,7 @@ def main() -> int:
         candidates, fixed, fresh_random, reused_random = generate_candidates(
             ranges, settings, rng, candidate_port
         )
+        failure_summary["candidate_count"] = len(candidates)
         log(
             f"本轮候选 {len(candidates)} 个：固定/历史 {len(fixed)} 个，"
             f"30 天内未测随机 {fresh_random} 个，"
@@ -2940,6 +3256,13 @@ def main() -> int:
         failed_ips = {
             str(row["ip"]) for row in tcp_rows if not row.get("reachable")
         }
+        failure_summary.update(
+            {
+                "tcp_reachable_count": reachable_count,
+                "tcp_failed_count": len(tcp_rows) - reachable_count,
+                "failed_count": len(failed_ips),
+            }
+        )
         log(
             f"TCP {candidate_port} 可连接："
             f"{reachable_count}/{len(tcp_rows)}"
@@ -2953,9 +3276,18 @@ def main() -> int:
             set(previous_active),
             settings.get("discovery_new_ip_share", 0.40),
         )
+        failure_summary.update(
+            {
+                "discovery_pool_count": len(discovery_ips),
+                "discovery_not_selected_count": max(
+                    0, reachable_count - len(discovery_ips)
+                ),
+            }
+        )
         if not discovery_ips:
             raise RuntimeError("没有可写入发现池的候选 IP")
         discovery_new_count = sum(1 for ip in discovery_ips if ip not in fixed)
+        failure_summary["discovery_new_count"] = discovery_new_count
         log(
             f"发现池组成：固定/历史 {len(discovery_ips) - discovery_new_count} 个，"
             f"新 IP {discovery_new_count} 个"
@@ -2993,16 +3325,22 @@ def main() -> int:
         log(
             f"三轮平均延迟有效：{len(delays)}/{len(discovery_ips)}"
         )
-        if not delays:
-            raise RuntimeError("发现池全部真实代理链路三轮测试失败")
-        record_vm_history(list(delays))
-
+        failure_summary.update(
+            {
+                "proxy_valid_count": len(delays),
+                "proxy_failed_count": max(0, len(discovery_ips) - len(delays)),
+            }
+        )
         valid_delay_ips = {
             ip
             for ip in (ip_from_node_name(name) for name in delays)
             if ip
         }
         failed_ips.update(set(discovery_ips).difference(valid_delay_ips))
+        failure_summary["failed_count"] = len(failed_ips)
+        if not delays:
+            raise RuntimeError("发现池全部真实代理链路三轮测试失败")
+        record_vm_history(list(delays))
 
         speed_count = max(1, int(settings["speed_candidates"]))
         current_discovery_name = (
@@ -3015,6 +3353,14 @@ def main() -> int:
             current_discovery_name,
             settings,
             rng,
+        )
+        failure_summary.update(
+            {
+                "speed_probe_selected_count": len(probe_names),
+                "speed_probe_not_selected_count": max(
+                    0, len(delays) - len(probe_names)
+                ),
+            }
         )
         log(
             f"速度粗测池 {len(probe_names)} 个：低延迟 "
@@ -3090,12 +3436,32 @@ def main() -> int:
         passed_probe_names = {
             str(row["node"]) for row in passed_probe_rows
         }
+        failure_summary.update(
+            {
+                "speed_probe_attempted_count": len(probe_rows),
+                "speed_probe_passed_count": len(passed_probe_rows),
+                "speed_probe_failed_count": len(probe_rows)
+                - len(passed_probe_rows),
+                "speed_probe_selected_not_attempted_count": max(
+                    0, len(probe_names) - len(probe_rows)
+                ),
+                "failed_count": len(failed_ips),
+            }
+        )
         if (
             current_discovery_name
             and current_discovery_name in passed_probe_names
             and current_discovery_name not in candidate_names
         ):
             candidate_names.append(current_discovery_name)
+        failure_summary.update(
+            {
+                "formal_selected_count": len(candidate_names),
+                "formal_not_selected_count": max(
+                    0, len(passed_probe_rows) - len(candidate_names)
+                ),
+            }
+        )
         if not candidate_names:
             raise RuntimeError("速度粗测没有节点通过，保留上一版正式池")
 
@@ -3190,6 +3556,28 @@ def main() -> int:
         )
         record_speed_history(rows)
         failed_rows = [x for x in rows if not x.get("speed_ok")]
+        failure_ranked = ranked
+        failure_rows = failed_rows
+        failure_summary.update(
+            {
+                "formal_attempted_count": len(rows),
+                "formal_passed_count": len(ranked),
+                "formal_failed_count": len(failed_rows),
+                "formal_selected_not_attempted_count": max(
+                    0, len(candidate_names) - len(rows)
+                ),
+                "fast_group_count": sum(
+                    1 for row in ranked if row.get("fast_group")
+                ),
+                "outside_fast_group_count": sum(
+                    1 for row in ranked if not row.get("fast_group")
+                ),
+                "fast_speed_ratio": normalize_fast_speed_ratio(
+                    settings.get("fast_speed_ratio", 0.95)
+                ),
+                "failed_count": len(failed_ips),
+            }
+        )
         write_latest(ranked + failed_rows)
         append_history(
             ranked,
@@ -3253,20 +3641,84 @@ def main() -> int:
             timeout_observer=lambda: record_timeout("decision"),
         )
         stage_durations = stage_timer.finish()
+        tcp_failed_count = len(tcp_rows) - reachable_count
+        discovery_not_selected_count = max(
+            0, reachable_count - len(discovery_ips)
+        )
+        proxy_failed_count = max(0, len(discovery_ips) - len(delays))
+        speed_probe_attempted_count = len(probe_rows)
+        speed_probe_selected_count = len(probe_names)
+        speed_probe_passed_count = len(passed_probe_rows)
+        speed_probe_failed_count = (
+            speed_probe_attempted_count - speed_probe_passed_count
+        )
+        speed_probe_not_selected_count = max(
+            0, len(delays) - speed_probe_selected_count
+        )
+        speed_probe_selected_not_attempted_count = max(
+            0, speed_probe_selected_count - speed_probe_attempted_count
+        )
+        formal_attempted_count = len(rows)
+        formal_selected_count = len(candidate_names)
+        formal_passed_count = len(ranked)
+        formal_failed_count = len(failed_rows)
+        formal_not_selected_count = max(
+            0, speed_probe_passed_count - formal_selected_count
+        )
+        formal_selected_not_attempted_count = max(
+            0, formal_selected_count - formal_attempted_count
+        )
+        fast_group_count = sum(1 for row in ranked if row.get("fast_group"))
+        outside_fast_group_count = max(
+            0, formal_passed_count - fast_group_count
+        )
+        stage_failed_count = (
+            tcp_failed_count
+            + proxy_failed_count
+            + speed_probe_failed_count
+            + formal_failed_count
+        )
         summary = {
+            "summary_schema_version": 2,
             "node_protocol": node_protocol,
             "node_port": candidate_port,
             "candidate_count": len(candidates),
             "tcp_reachable_count": reachable_count,
+            "tcp_failed_count": tcp_failed_count,
             "discovery_pool_count": len(discovery_ips),
             "discovery_new_count": discovery_new_count,
+            "discovery_not_selected_count": discovery_not_selected_count,
             "proxy_valid_count": len(delays),
+            "proxy_failed_count": proxy_failed_count,
+            "speed_probe_selected_count": speed_probe_selected_count,
+            "speed_probe_attempted_count": speed_probe_attempted_count,
+            "speed_probe_passed_count": speed_probe_passed_count,
+            "speed_probe_failed_count": speed_probe_failed_count,
+            "speed_probe_not_selected_count": speed_probe_not_selected_count,
+            "speed_probe_selected_not_attempted_count": (
+                speed_probe_selected_not_attempted_count
+            ),
+            "formal_selected_count": formal_selected_count,
+            "formal_attempted_count": formal_attempted_count,
+            "formal_passed_count": formal_passed_count,
+            "formal_failed_count": formal_failed_count,
+            "formal_not_selected_count": formal_not_selected_count,
+            "formal_selected_not_attempted_count": (
+                formal_selected_not_attempted_count
+            ),
+            "fast_group_count": fast_group_count,
+            "outside_fast_group_count": outside_fast_group_count,
+            "fast_speed_ratio": normalize_fast_speed_ratio(
+                settings.get("fast_speed_ratio", 0.95)
+            ),
+            # Backward-compatible aliases retained for existing consumers.
             "speed_passed_count": len(ranked),
             "speed_attempted_count": len(rows),
             "active_pool_size": len(active_ips),
             "new_active_count": len(set(active_ips).difference(previous_active)),
             "pool_size_delta": len(active_ips) - len(previous_active),
             "failed_count": len(failed_ips),
+            "failure_event_count": stage_failed_count,
             "deferred_count": deferred_count,
             "duration_seconds": round(time.monotonic() - run_started, 1),
             "stage_durations_seconds": stage_durations,
@@ -3296,7 +3748,24 @@ def main() -> int:
             f"正式池已更新为 {len(active_ips)} 个 IP；"
             f"其中本轮新发现并进入正式池 "
             f"{sum(1 for x in active_ips if x not in fixed)} 个；"
-            f"本轮失败并排除 {len(failed_ips)} 个"
+            f"各阶段失败 IP {len(failed_ips)} 个"
+        )
+        log(
+            "阶段漏斗："
+            f"{len(candidates)} → TCP {reachable_count} → "
+            f"代理 {len(delays)} → "
+            f"粗测 {speed_probe_passed_count}/{speed_probe_attempted_count} → "
+            f"正式 {formal_passed_count}/{formal_attempted_count}"
+        )
+        log(
+            "阶段失败："
+            f"TCP {tcp_failed_count}，代理 {proxy_failed_count}，"
+            f"粗测 {speed_probe_failed_count}，正式 {formal_failed_count}；"
+            "未入选："
+            f"TCP 后 {discovery_not_selected_count}，"
+            f"代理后 {speed_probe_not_selected_count}，"
+            f"粗测后 {formal_not_selected_count}，"
+            f"高速组外 {outside_fast_group_count}（非失败）"
         )
         log(f"切换决策：{decision['reason']}")
         log(
@@ -3323,7 +3792,7 @@ def main() -> int:
                     "notification_report_retention_days", 30
                 ),
             )
-        except OSError as exc:
+        except Exception as exc:
             log(f"生成完整通知报告失败，改用简版报告：{exc}")
         send_windows_notification(
             notification_title,
@@ -3334,12 +3803,28 @@ def main() -> int:
 
     except Exception as exc:
         failed_stage_durations = stage_timer.finish()
+        failure_summary.update(
+            {
+                "deferred_count": deferred_count,
+                "duration_seconds": round(time.monotonic() - run_started, 1),
+                "stage_durations_seconds": failed_stage_durations,
+                "timeout_counts": dict(timeout_counts),
+                "timeout_count_total": sum(timeout_counts.values()),
+                "failed_count": len(failed_ips),
+            }
+        )
+        partial_funnel = ""
+        if has_detailed_scan_summary(failure_summary):
+            partial_funnel = "\n" + "\n".join(
+                format_scan_funnel_lines(failure_summary)
+            )
         failure = (
             f"阶段：{stage}\n"
             f"耗时：{format_duration(time.monotonic() - run_started)}\n"
             f"阶段耗时：{format_stage_timings(failed_stage_durations)}\n"
             f"超时次数：{format_timeout_counts(timeout_counts)}\n"
             f"错误：{type(exc).__name__}: {exc}"
+            f"{partial_funnel}"
         )
         log(f"运行失败：{failure}")
         if failed_stage_durations:
@@ -3352,9 +3837,31 @@ def main() -> int:
             )
         if not args.diagnose:
             mode = "轻量扫描" if args.quick else "深度扫描"
+            failure_title = f"Clash {mode}：运行失败"
+            report_path: Path | None = None
+            try:
+                report_path = create_notification_report(
+                    failure_title,
+                    failure,
+                    decision={
+                        "current_ip_before": current_ip,
+                        "current_ip_after": current_ip,
+                        "switched": False,
+                        "reason": f"{stage}：{type(exc).__name__}: {exc}",
+                    },
+                    summary=failure_summary,
+                    ranked=failure_ranked,
+                    failed_rows=failure_rows,
+                    retention_days=settings.get(
+                        "notification_report_retention_days", 30
+                    ),
+                )
+            except Exception as report_exc:
+                log(f"生成失败通知报告失败：{report_exc}")
             send_windows_notification(
-                f"Clash {mode}：运行失败",
+                failure_title,
                 failure,
+                report_path,
             )
         return 1
     finally:
