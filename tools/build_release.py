@@ -21,11 +21,13 @@ CORE_FILES = (
 )
 
 WINDOWS_FILES = (
+    "Install.cmd",
     "deep_scan_5000.bat",
     "diagnose.bat",
     "health_monitor.ps1",
     "install_aggressive_5000_30min.ps1",
     "install_hybrid_5000.ps1",
+    "install_wizard.ps1",
     "light_scan_200.bat",
     "notify_windows.ps1",
     "quick_test.bat",
@@ -42,6 +44,7 @@ EXAMPLE_FILES = (
 )
 
 ROOT_METADATA_FILES = (
+    "CHANGELOG.md",
     "LICENSE",
     "NOTICE.md",
     "README.md",
@@ -53,7 +56,7 @@ CONFIG_FILES = (
     "seed_ips.txt",
 )
 
-CRLF_SUFFIXES = {".bat", ".ps1"}
+CRLF_SUFFIXES = {".bat", ".cmd", ".ps1"}
 LF_SUFFIXES = {"", ".json", ".md", ".py", ".txt", ".yaml", ".yml"}
 UTF8_BOM = b"\xef\xbb\xbf"
 

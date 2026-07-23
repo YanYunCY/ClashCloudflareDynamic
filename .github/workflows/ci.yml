@@ -77,6 +77,10 @@ jobs:
         shell: powershell
         run: ./tests/windows/test_setup.ps1
 
+      - name: Run install wizard isolation tests
+        shell: powershell
+        run: ./tests/windows/test_install_wizard.ps1
+
       - name: Run installer isolation tests
         shell: powershell
         run: ./tests/windows/test_install_hybrid.ps1
