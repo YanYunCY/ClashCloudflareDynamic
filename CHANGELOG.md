@@ -2,6 +2,16 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.2.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.2.0) — 2026-07-23
+
+- 图形安装器改为“连接与协议 → 节点参数 → 确认安装”三步向导；
+- 新增深色步骤导航、分组卡片、就地错误提示和统一的安装结果窗口；
+- 确认页显示协议、端口、SNI、Host、WS 路径或模板文件名，UUID、密码和 API 密钥始终脱敏；
+- 摘要会隐藏 URL 中意外包含的用户信息，错误详情和安装结果支持复制；
+- 改进键盘焦点、可访问名称、Esc/Enter 操作以及高 DPI 和小屏幕滚动；
+- 公开 SNI/Host 占位符统一为保留域名 `.example`，安装器拒绝将占位域名写入真实配置；
+- 节点生成、凭据处理、事务安装、计划任务和扫描核心逻辑保持不变。
+
 ## [v1.1.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.1.0) — 2026-07-23
 
 - Release 新增可双击的 `Install.cmd` 和 PowerShell 5.1 图形安装向导；

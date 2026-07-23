@@ -29,7 +29,8 @@ tools/privacy_check.py         发布前隐私检查
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
-| `v1.1.0` | 最新稳定版 | Release 图形安装向导、升级保留与事务重配置 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.1.0) |
+| `v1.2.0` | 最新稳定版 | 三步现代安装向导、脱敏确认页、小屏与无障碍改进 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.2.0) |
+| `v1.1.0` | 历史稳定版 | Release 图形安装向导、升级保留与事务重配置 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.1.0) |
 | `v1.0.2` | 历史稳定版 | 阶段漏斗、失败与名额未入选分离、失败报告 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.2) |
 | `v1.0.1` | 历史稳定版 | 协议与端口写入 CSV、决策 JSON 和报告 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.1) |
 | `v1.0.0` | 已被取代 | 首个公开版本，仅建议用于历史查阅 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.0) |
@@ -76,7 +77,7 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 
 普通用户推荐使用图形向导：
 
-1. 从 [v1.1.0 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.1.0) 下载 `ClashCloudflareDynamic.zip`；
+1. 从 [v1.2.0 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.2.0) 下载 `ClashCloudflareDynamic.zip`；
 2. 完整解压 ZIP，不要直接在压缩包预览窗口中运行；
 3. 双击根目录的 `Install.cmd`；
 4. 选择 VMess、VLESS、Trojan 或自定义 Mihomo 模板，填写端口、API 和节点参数；
@@ -86,8 +87,8 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 
 检测到已有安装时：
 
-- 选择“是”：升级或修复程序，保留现有协议、端口和凭据；
-- 选择“否”：重新配置，安装器先事务备份，再替换设置、重建 Clash YAML，并用原 IP 列表重建 provider；
+- 选择“保留配置并升级（推荐）”：升级或修复程序，保留现有协议、端口和凭据；
+- 选择“重新填写节点参数”：安装器先事务备份，再替换设置、重建 Clash YAML，并用原 IP 列表重建 provider；
 - 选择“取消”：不修改安装。
 
 这是引导式一键安装，仍要求本机已安装 Python 3.10+、`pythonw.exe` 和 Clash Verge Rev。项目尚未使用代码签名证书，因此 Windows 可能显示未知发布者提示；请只从本仓库 Release 下载，并核对 Release 中公布的 SHA-256。
@@ -141,7 +142,7 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
    - `secret`：REST API 密钥，没有则留空；
    - `mixed_proxy`：本地 mixed HTTP 代理地址。
 
-3. 编辑 `node_template.json`，替换示例 UUID/密码、SNI、Host 和传输路径，并再次核对 `type` 与 `port`。
+3. 编辑 `node_template.json`，把 `replace-with-your-domain.example` 同时替换为你自己的 SNI/Host 域名，并替换示例 UUID/密码和传输路径，再次核对 `type` 与 `port`。公开源码和 Release 只包含保留的占位域名，不包含维护者或其他用户的真实域名；安装器也会拒绝使用 `.example`、`example.com`、`example.net` 或 `example.org` 生成实际配置。
 
    Cloudflare 普通代理当前支持的 HTTPS 入口端口为 `443`、`2053`、`2083`、`2087`、`2096`、`8443`。端口是否真的适用于你的节点，还取决于域名、源站和服务端配置；不能因为某个 Cloudflare IP 的端口可建立 TCP 连接，就认定真实代理协议可用。项目仍会用完整节点链路淘汰假阳性。详见 [Cloudflare 官方端口说明](https://developers.cloudflare.com/fundamentals/reference/network-ports/)。
 
@@ -153,7 +154,7 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
    powershell -ExecutionPolicy Bypass -File .\scripts\windows\install_hybrid_5000.ps1
    ```
 
-   安装器会在创建目录、备份或任务之前检查本地配置；仍含零 UUID、示例密码、`example.com` 或示例 WebSocket 路径时会直接拒绝安装。
+   安装器会在创建目录、备份或任务之前检查本地配置；仍含零 UUID、示例密码、保留的示例域名或示例 WebSocket 路径时会直接拒绝安装。
 
 5. 在 Clash Verge Rev 导入：
 
@@ -173,6 +174,8 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 ## 配置安全
 
 `settings.json`、`node_template.json`、生成的 Clash YAML、provider、日志、数据库和通知报告均已列入 `.gitignore`。不要使用 `git add -f` 强制提交它们。
+
+公开的 `config.template.yaml` 不包含 SNI、Host、UUID 或节点密码。SNI/Host 只来自当前用户在安装向导中填写的域名，并写入该用户本机的 `node_template.json` 和 provider；这是 Mihomo 通过 Cloudflare IP 定向到用户自己节点域名所必需的数据，不会上传到 GitHub。公开的三个节点示例统一使用 `replace-with-your-domain.example`，不能直接安装或连接。
 
 隐私检查器也会检查被 Git 忽略但仍留在工作目录中的本地配置，并且只报告文件名和风险类别，不打印匹配到的凭据。制作 Release 压缩包时应从已审核的 Git 提交生成归档，不要直接压缩正在运行或测试过的工作目录。
 

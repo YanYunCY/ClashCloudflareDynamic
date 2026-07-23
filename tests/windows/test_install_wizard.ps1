@@ -15,6 +15,204 @@ function Assert-True([bool]$Condition, [string]$Message) {
     }
 }
 
+$WizardTokens = $null
+$WizardParseErrors = $null
+$WizardAst = [Management.Automation.Language.Parser]::ParseFile(
+    $WizardPath,
+    [ref]$WizardTokens,
+    [ref]$WizardParseErrors
+)
+Assert-True ($WizardParseErrors.Count -eq 0) (
+    "安装向导 PowerShell AST 解析失败：" +
+    (($WizardParseErrors | ForEach-Object Message) -join "；")
+)
+$InstallFormAst = $WizardAst.Find({
+    param($Node)
+    $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+    $Node.Name -eq "Show-InstallForm"
+}, $true)
+Assert-True ($null -ne $InstallFormAst) "安装向导缺少 Show-InstallForm"
+$InstallFormText = $InstallFormAst.Extent.Text
+foreach ($PageTitle in @("连接与协议", "节点参数", "确认安装")) {
+    Assert-True ($InstallFormText.Contains($PageTitle)) "安装向导缺少步骤：$PageTitle"
+}
+foreach ($PageState in @(
+    @{ Control = "ConnectionPage"; Index = 0 },
+    @{ Control = "NodePage"; Index = 1 },
+    @{ Control = "ReviewPage"; Index = 2 }
+)) {
+    $VisiblePattern = (
+        '\${0}\.Visible\s*=\s*\$UiState\.CurrentPage\s*-eq\s*{1}' -f
+        $PageState.Control,
+        $PageState.Index
+    )
+    Assert-True ([regex]::IsMatch($InstallFormText, $VisiblePattern)) (
+        "步骤页状态映射缺失：$($PageState.Control) -> $($PageState.Index)"
+    )
+}
+Assert-True ($InstallFormText.Contains('CurrentPage = 0')) "UI 状态没有从第 1 步初始化"
+Assert-True ($InstallFormText.Contains('ConfirmedCustomPort = $null')) "非标准端口确认状态缺失"
+Assert-True ($InstallFormText.Contains('$UiState.CurrentPage -= 1')) "向导缺少返回状态迁移"
+Assert-True ($InstallFormText.Contains('$UiState.CurrentPage = 1')) "向导缺少进入第 2 步状态迁移"
+Assert-True ($InstallFormText.Contains('$UiState.CurrentPage = 2')) "向导缺少进入第 3 步状态迁移"
+Assert-True ($InstallFormText.Contains('{ "开始安装" } else { "继续" }')) (
+    "最终步骤按钮没有切换为开始安装"
+)
+
+foreach ($PasswordControl in @("SecretBox", "CredentialBox")) {
+    $PasswordAssignments = @($InstallFormAst.FindAll({
+        param($Node)
+        $Node -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $Node.Left.Extent.Text -eq "`$$PasswordControl.UseSystemPasswordChar"
+    }, $true))
+    Assert-True ($PasswordAssignments.Count -gt 0) "$PasswordControl 没有启用密码掩码"
+    foreach ($Assignment in $PasswordAssignments) {
+        Assert-True ($Assignment.Right.Extent.Text -eq '$true') (
+            "$PasswordControl 存在关闭密码掩码的赋值"
+        )
+    }
+}
+
+$ExpectedSummaryValues = @{
+    NodeCredential = @("已设置（已隐藏）", "由自定义模板提供（已隐藏）")
+    ApiCredential = @("已设置（已隐藏）", "未设置")
+}
+foreach ($SummaryKey in $ExpectedSummaryValues.Keys) {
+    $SummaryAssignment = $InstallFormAst.Find({
+        param($Node)
+        $Node -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $Node.Left.Extent.Text -eq "`$SummaryValueLabels[`"$SummaryKey`"].Text"
+    }, $true)
+    Assert-True ($null -ne $SummaryAssignment) "确认页缺少脱敏摘要：$SummaryKey"
+    $OutputValues = @(
+        $SummaryAssignment.Right.FindAll({
+            param($Node)
+            $Node -is [Management.Automation.Language.StringConstantExpressionAst] -and
+            $Node.Parent -is [Management.Automation.Language.CommandExpressionAst]
+        }, $true) | ForEach-Object Value | Sort-Object -Unique
+    )
+    $ExpectedValues = @($ExpectedSummaryValues[$SummaryKey] | Sort-Object -Unique)
+    Assert-True (($OutputValues -join "|") -eq ($ExpectedValues -join "|")) (
+        "确认页 $SummaryKey 脱敏输出异常：$($OutputValues -join '、')"
+    )
+}
+
+Assert-True ($InstallFormText.Contains('$SummaryValueLabels["Transport"].Text')) (
+    "确认页没有显示 WS 路径或自定义模板文件名"
+)
+Assert-True ($InstallFormText.Contains('$FormatSummaryUri')) "确认页 URI 没有脱敏处理"
+Assert-True ($InstallFormText.Contains('"***@"')) "确认页 URI 用户信息脱敏标记缺失"
+Assert-True (-not $InstallFormText.Contains('$Parsed.PathAndQuery')) (
+    "确认页 URI 不应显示可能含令牌的路径或查询参数"
+)
+Assert-True (-not $InstallFormText.Contains('$Parsed.Fragment')) (
+    "确认页 URI 不应显示可能含令牌的 Fragment"
+)
+Assert-True ($InstallFormText.Contains('$Form.AutoScroll = $true')) "小屏幕缺少滚动兜底"
+Assert-True ($InstallFormText.Contains('$Form.MaximizeBox = $true')) "主向导无法最大化"
+
+$CleanupTry = $WizardAst.Find({
+    param($Node)
+    $Node -is [Management.Automation.Language.TryStatementAst] -and
+    $null -ne $Node.Finally -and
+    $Node.Finally.Extent.Text.Contains('$OwnedStagePath')
+}, $true)
+Assert-True ($null -ne $CleanupTry) "没有找到临时凭据清理 finally"
+$CleanupText = $CleanupTry.Finally.Extent.Text
+Assert-True ($CleanupText.Contains('$Attempt -le 3')) "临时凭据清理没有重试"
+Assert-True ($CleanupText.Contains('需要清理临时配置')) "临时凭据清理失败没有明确标题"
+Assert-True ($CleanupText.Contains('MessageBoxIcon]::Warning')) (
+    "临时凭据清理失败没有显式警告"
+)
+
+foreach ($HelperName in @(
+    "Test-LoopbackHttpUri",
+    "Assert-CommonInput",
+    "Read-JsonObject",
+    "New-NodeTemplate"
+)) {
+    $HelperAst = $WizardAst.Find({
+        param($Node)
+        $Node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $Node.Name -eq $HelperName
+    }, $true)
+    Assert-True ($null -ne $HelperAst) "安装向导缺少 UI 运行时依赖：$HelperName"
+    Invoke-Expression $HelperAst.Extent.Text
+}
+
+$DialogCall = '        $DialogResult = $Form.ShowDialog()'
+$UiRuntimeHarness = @'
+    $Form.ShowInTaskbar = $false
+    $Form.Opacity = 0
+    $Form.Add_Shown({
+        try {
+            $ProtocolBox.SelectedIndex = 0
+            $PortBox.Text = "443"
+            $ControllerBox.Text = "http://127.0.0.1:9090"
+            $MixedBox.Text = "http://127.0.0.1:7890"
+            $NextButton.PerformClick()
+            if ($UiState.CurrentPage -ne 1) {
+                throw "继续按钮没有进入第 2 步"
+            }
+            [void]$script:WizardUiTestTrace.Add(1)
+
+            $CredentialBox.Text = "11111111-2222-3333-4444-555555555555"
+            $ServerBox.Text = "node.test.invalid"
+            $HostBox.Text = "node.test.invalid"
+            $PathBox.Text = "/fixture-ws"
+            $NextButton.PerformClick()
+            if ($UiState.CurrentPage -ne 2) {
+                throw "继续按钮没有进入第 3 步：$($ErrorLabel.Text)"
+            }
+            [void]$script:WizardUiTestTrace.Add(2)
+
+            $BackButton.PerformClick()
+            if ($UiState.CurrentPage -ne 1) {
+                throw "返回按钮没有回到第 2 步"
+            }
+            [void]$script:WizardUiTestTrace.Add(1)
+
+            $NextButton.PerformClick()
+            if ($UiState.CurrentPage -ne 2) {
+                throw "返回后无法再次进入第 3 步：$($ErrorLabel.Text)"
+            }
+            [void]$script:WizardUiTestTrace.Add(2)
+            $NextButton.PerformClick()
+        } catch {
+            $script:WizardUiTestError = $_.Exception.Message
+            $Form.DialogResult = [Windows.Forms.DialogResult]::Abort
+            $Form.Close()
+        }
+    })
+'@
+$InstrumentedInstallForm = $InstallFormText.Replace(
+    $DialogCall,
+    $UiRuntimeHarness + "`r`n" + $DialogCall
+)
+Assert-True ($InstrumentedInstallForm -ne $InstallFormText) (
+    "无法注入安装向导 UI 运行时测试"
+)
+Invoke-Expression $InstrumentedInstallForm
+$CloudflareHttpsPorts = @(443, 2053, 2083, 2087, 2096, 8443)
+$ExamplesRoot = Join-Path $ReleaseRoot "examples"
+$script:WizardUiTestTrace = New-Object Collections.ArrayList
+$script:WizardUiTestError = $null
+$UiRuntimeResult = Show-InstallForm
+Assert-True ([string]::IsNullOrWhiteSpace($script:WizardUiTestError)) (
+    "安装向导 UI 运行时测试失败：$script:WizardUiTestError"
+)
+Assert-True (($script:WizardUiTestTrace -join ",") -eq "1,2,1,2") (
+    "安装向导翻页轨迹异常：$($script:WizardUiTestTrace -join ',')"
+)
+Assert-True ($null -ne $UiRuntimeResult) "开始安装按钮没有返回配置"
+Assert-True ($UiRuntimeResult.Protocol -eq "vmess") "UI 运行时返回协议错误"
+Assert-True ($UiRuntimeResult.Port -eq 443) "UI 运行时返回端口错误"
+Assert-True ($UiRuntimeResult.ServerName -eq "node.test.invalid") (
+    "UI 运行时返回 SNI 错误"
+)
+$script:WizardUiTestTrace = $null
+$script:WizardUiTestError = $null
+
 function Invoke-Wizard([string[]]$Arguments) {
     $PreviousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
@@ -184,10 +382,6 @@ try {
     $LauncherText = [IO.File]::ReadAllText($LauncherPath)
     Assert-True ($LauncherText.Contains("-STA")) "Install.cmd 未以 STA 启动向导"
     Assert-True ($LauncherText.Contains("%~dp0install_wizard.ps1")) "Install.cmd 未使用自身目录定位向导"
-    $WizardText = [IO.File]::ReadAllText($WizardPath)
-    Assert-True ($WizardText.Contains('$Attempt -le 3')) "临时凭据清理没有重试"
-    Assert-True ($WizardText.Contains('MessageBoxIcon]::Warning')) "临时凭据清理失败没有显式警告"
-
     Write-Output "install wizard isolation tests: OK"
     exit 0
 } finally {
