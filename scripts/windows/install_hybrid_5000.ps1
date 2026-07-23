@@ -136,11 +136,11 @@ function Assert-PublicConfigurationReady(
         $PlaceholderCategories += "示例密码"
     }
     if ($Template.PSObject.Properties.Name -contains "servername" -and
-        [string]$Template.servername -match '(?i)(^|\.)example\.(com|net|org)$') {
+        [string]$Template.servername -match '(?i)(^|\.)example\.(com|net|org)$|\.example$') {
         $PlaceholderCategories += "示例 SNI"
     }
     if ($Template.PSObject.Properties.Name -contains "sni" -and
-        [string]$Template.sni -match '(?i)(^|\.)example\.(com|net|org)$') {
+        [string]$Template.sni -match '(?i)(^|\.)example\.(com|net|org)$|\.example$') {
         $PlaceholderCategories += "示例 SNI"
     }
     if ($Template.PSObject.Properties.Name -contains "ws-opts") {
@@ -152,7 +152,7 @@ function Assert-PublicConfigurationReady(
         if ($WsOptions.PSObject.Properties.Name -contains "headers") {
             $Headers = $WsOptions.headers
             if ($Headers.PSObject.Properties.Name -contains "Host" -and
-                [string]$Headers.Host -match '(?i)(^|\.)example\.(com|net|org)$') {
+                [string]$Headers.Host -match '(?i)(^|\.)example\.(com|net|org)$|\.example$') {
                 $PlaceholderCategories += "示例 Host"
             }
         }

@@ -3,12 +3,12 @@
   "port": 443,
   "password": "replace-with-your-password",
   "udp": true,
-  "sni": "example.com",
+  "sni": "replace-with-your-domain.example",
   "network": "ws",
   "ws-opts": {
     "path": "/your-websocket-path",
     "headers": {
-      "Host": "example.com"
+      "Host": "replace-with-your-domain.example"
     }
   }
 }

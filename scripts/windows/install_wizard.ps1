@@ -84,7 +84,7 @@ function Assert-CommonInput([hashtable]$InputData) {
     foreach ($FieldName in @("ServerName", "HostName")) {
         $Value = [string]$InputData[$FieldName]
         if ([string]::IsNullOrWhiteSpace($Value) -or
-            $Value -match "(?i)(^|\.)example\.(com|net|org)$") {
+            $Value -match "(?i)(^|\.)example\.(com|net|org)$|\.example$") {
             throw "$FieldName 必须填写节点实际使用的域名。"
         }
     }

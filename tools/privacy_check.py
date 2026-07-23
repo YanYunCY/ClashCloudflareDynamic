@@ -90,7 +90,12 @@ PUBLIC_CREDENTIAL_PLACEHOLDERS = {
     "replace-with-your-password",
     "your-password",
 }
-PUBLIC_HOST_PLACEHOLDERS = {"example.com", "example.net", "example.org"}
+PUBLIC_HOST_PLACEHOLDERS = {
+    "example.com",
+    "example.net",
+    "example.org",
+    "replace-with-your-domain.example",
+}
 CREDENTIAL_KEYS = {
     "api_key",
     "apikey",

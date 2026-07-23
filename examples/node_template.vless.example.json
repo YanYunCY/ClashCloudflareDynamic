@@ -5,11 +5,11 @@
   "udp": true,
   "tls": true,
   "network": "ws",
-  "servername": "example.com",
+  "servername": "replace-with-your-domain.example",
   "ws-opts": {
     "path": "/your-websocket-path",
     "headers": {
-      "Host": "example.com"
+      "Host": "replace-with-your-domain.example"
     }
   }
 }

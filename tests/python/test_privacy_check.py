@@ -28,10 +28,10 @@ class PrivacyCheckTests(unittest.TestCase):
             "type": "vmess",
             "port": 443,
             "uuid": privacy_check.ZERO_UUID,
-            "servername": "example.com",
+            "servername": "replace-with-your-domain.example",
             "ws-opts": {
                 "path": "/your-websocket-path",
-                "headers": {"Host": "example.com"},
+                "headers": {"Host": "replace-with-your-domain.example"},
             },
         }
         self.assertTrue(
@@ -47,11 +47,11 @@ class PrivacyCheckTests(unittest.TestCase):
             "type": "trojan",
             "port": 8443,
             "password": "replace-with-your-password",
-            "sni": "example.com",
+            "sni": "replace-with-your-domain.example",
             "network": "ws",
             "ws-opts": {
                 "path": "/your-websocket-path",
-                "headers": {"Host": "example.com"},
+                "headers": {"Host": "replace-with-your-domain.example"},
             },
         }
         self.assertTrue(
