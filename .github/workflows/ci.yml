@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-tests:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Validate example JSON and UTF-8 without BOM
+        shell: pwsh
+        run: |
+          python -c "import json, pathlib; files=list(pathlib.Path('examples').glob('*.json')); [json.loads(p.read_text(encoding='utf-8')) for p in files]; assert files and all(not p.read_bytes().startswith(b'\xef\xbb\xbf') for p in files)"
+
+      - name: Compile Python
+        shell: pwsh
+        run: python -m py_compile dynamic_selector.py storage_maintenance.py health_monitor_launcher.py tools/privacy_check.py
+
+      - name: Run Python unit tests
+        shell: pwsh
+        run: python -m unittest -v test_dynamic_selector.py test_storage_maintenance.py test_privacy_check.py
+
+      - name: Parse PowerShell scripts
+        shell: powershell
+        run: |
+          $failed = $false
+          Get-ChildItem -Recurse -File -Filter *.ps1 | ForEach-Object {
+            $bytes = [IO.File]::ReadAllBytes($_.FullName)
+            if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or
+                $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+              $failed = $true
+              Write-Error "PowerShell UTF-8 BOM missing: $($_.FullName)"
+            }
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Error "PowerShell parse failed: $($_.FullName)"
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Run setup isolation tests
+        shell: powershell
+        run: ./test_setup.ps1
+
+      - name: Run installer isolation tests
+        shell: powershell
+        run: ./test_install_hybrid.ps1
+
+      - name: Run uninstaller isolation tests
+        shell: powershell
+        run: ./test_uninstall.ps1
+
+      - name: Remove generated caches
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+          if (Test-Path logs) { Remove-Item logs -Recurse -Force }
+
+      - name: Run privacy check
+        shell: pwsh
+        run: python tools/privacy_check.py
