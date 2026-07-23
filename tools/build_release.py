@@ -53,6 +53,10 @@ CONFIG_FILES = (
     "seed_ips.txt",
 )
 
+CRLF_SUFFIXES = {".bat", ".ps1"}
+LF_SUFFIXES = {"", ".json", ".md", ".py", ".txt", ".yaml", ".yml"}
+UTF8_BOM = b"\xef\xbb\xbf"
+
 FORBIDDEN_FILE_NAMES = {
     "settings.json",
     "node_template.json",
@@ -167,6 +171,20 @@ def validate_staged_package(
         raise RuntimeError(f"release is missing required files: {joined}")
 
 
+def normalized_release_bytes(source: Path, destination: Path) -> bytes:
+    """Return canonical bytes independent of the checkout's line endings."""
+    data = source.read_bytes()
+    suffix = destination.suffix.casefold()
+    if suffix not in CRLF_SUFFIXES | LF_SUFFIXES:
+        return data
+
+    text = data.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
+    if suffix in CRLF_SUFFIXES:
+        text = text.replace("\n", "\r\n")
+    encoded = text.encode("utf-8")
+    return UTF8_BOM + encoded if suffix == ".ps1" else encoded
+
+
 def safe_remove_tree(path: Path, allowed_parent: Path) -> None:
     resolved = path.resolve()
     parent = allowed_parent.resolve()
@@ -182,8 +200,7 @@ def write_archive(package_root: Path, archive_path: Path) -> None:
         with zipfile.ZipFile(
             temporary_archive,
             mode="w",
-            compression=zipfile.ZIP_DEFLATED,
-            compresslevel=9,
+            compression=zipfile.ZIP_STORED,
         ) as archive:
             for source in sorted(package_root.rglob("*")):
                 if source.is_file():
@@ -192,7 +209,7 @@ def write_archive(package_root: Path, archive_path: Path) -> None:
                         archive_name.as_posix(),
                         date_time=(1980, 1, 1, 0, 0, 0),
                     )
-                    info.compress_type = zipfile.ZIP_DEFLATED
+                    info.compress_type = zipfile.ZIP_STORED
                     info.external_attr = 0o100644 << 16
                     archive.writestr(info, source.read_bytes())
         os.replace(temporary_archive, archive_path)
@@ -218,7 +235,7 @@ def build_release(
         for source, destination in manifest:
             target = staged_root / destination
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+            target.write_bytes(normalized_release_bytes(source, destination))
         validate_staged_package(staged_root, required_destinations)
 
         safe_remove_tree(package_root, dist_root)

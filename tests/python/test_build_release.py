@@ -36,6 +36,15 @@ class ReleaseBuildTests(unittest.TestCase):
             self.assertFalse(
                 any(build_release.is_forbidden_release_path(path) for path in staged)
             )
+            for relative in staged:
+                data = (package_root / relative).read_bytes()
+                with self.subTest(line_endings=relative.as_posix()):
+                    if relative.suffix.casefold() in build_release.CRLF_SUFFIXES:
+                        self.assertNotIn(b"\n", data.replace(b"\r\n", b""))
+                    elif relative.suffix.casefold() in build_release.LF_SUFFIXES:
+                        self.assertNotIn(b"\r", data)
+                    if relative.suffix.casefold() == ".ps1":
+                        self.assertTrue(data.startswith(build_release.UTF8_BOM))
 
             with zipfile.ZipFile(archive_path) as archive:
                 archived = set(archive.namelist())
