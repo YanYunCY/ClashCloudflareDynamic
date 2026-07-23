@@ -80,7 +80,7 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 2. 完整解压 ZIP，不要直接在压缩包预览窗口中运行；
 3. 双击根目录的 `Install.cmd`；
 4. 选择 VMess、VLESS、Trojan 或自定义 Mihomo 模板，填写端口、API 和节点参数；
-5. 安装完成后，在 Clash Verge Rev 导入向导显示的 YAML，并选择 `节点选择 → 自动选择`。
+5. 按下方“Clash Verge Rev 中的必要设置”启用外部控制，然后导入向导显示的 YAML，并选择 `节点选择 → 自动选择`。
 
 向导不会下载或执行网络上的安装脚本。UUID、密码和 API secret 使用掩码输入，只写入受控临时目录和本机安装目录；临时配置在安装成功或失败后都会清理，不会留在 Release 解压目录。
 
@@ -91,6 +91,27 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 - 选择“取消”：不修改安装。
 
 这是引导式一键安装，仍要求本机已安装 Python 3.10+、`pythonw.exe` 和 Clash Verge Rev。项目尚未使用代码签名证书，因此 Windows 可能显示未知发布者提示；请只从本仓库 Release 下载，并核对 Release 中公布的 SHA-256。
+
+## Clash Verge Rev 中的必要设置
+
+安装脚本不能代替用户修改 Clash Verge Rev 的应用设置。首次使用时必须启用 Mihomo 外部控制，否则程序无法通过 REST API 读取 provider、测试节点或切换“自动选择”：
+
+1. 打开 Clash Verge Rev，进入 `设置 → Clash 设置`（不同版本可能显示为 Mihomo 内核设置）；
+2. 找到并打开 `外部控制`；
+3. 外部控制地址建议保持为 `127.0.0.1:9090`，不要绑定到 `0.0.0.0` 或公网地址；
+4. 如果 Clash Verge Rev 设置了外部控制密钥，请在安装向导的“Mihomo API 密钥”中填写完全相同的值；没有设置密钥时两边都留空；
+5. 如果使用其他端口，请同时把安装向导中的 Mihomo API 改为对应地址，例如 `http://127.0.0.1:9191`；
+6. 保存设置，并按 Clash Verge Rev 提示重载配置或重启 Mihomo 内核；
+7. 进入配置页面，导入并启用：
+
+   ```text
+   %LOCALAPPDATA%\ClashCloudflareDynamic\clash_cloudflare_dynamic_verge_safe.yaml
+   ```
+
+8. 进入代理页面，在 `节点选择` 中选择 `自动选择`；
+9. 双击安装目录中的 `diagnose.bat`。只有显示“Mihomo API：正常”“provider SAFE_PATHS：正常”和“节点选择当前策略：自动选择”后，自动扫描与切换才算配置完成。
+
+外部控制只需要允许本机访问。不要为了排查连接问题关闭密钥、监听所有网卡或把控制端口暴露到局域网/公网；如果诊断显示连接被拒绝，优先检查“外部控制”开关、端口以及 Mihomo 内核是否已经重新加载。
 
 ## 手动安装（高级用户与开发者）
 
