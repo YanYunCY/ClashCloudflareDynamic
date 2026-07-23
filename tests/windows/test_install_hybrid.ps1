@@ -99,6 +99,26 @@ function Unregister-ScheduledTask {
 function Stop-ScheduledTask {
     [CmdletBinding()]
     param([string]$TaskName)
+    $global:ClashCloudflareDynamicTestStoppedTasks += $TaskName
+    $global:ClashCloudflareDynamicTestRunningTasks = @(
+        $global:ClashCloudflareDynamicTestRunningTasks |
+            Where-Object { $_ -ne $TaskName }
+    )
+}
+
+function Disable-ScheduledTask {
+    [CmdletBinding()]
+    param([string]$TaskName)
+    $global:ClashCloudflareDynamicTestDisabledTasks += $TaskName
+}
+
+function Start-ScheduledTask {
+    [CmdletBinding()]
+    param([string]$TaskName)
+    $global:ClashCloudflareDynamicTestStartedTasks += $TaskName
+    if ($global:ClashCloudflareDynamicTestRunningTasks -notcontains $TaskName) {
+        $global:ClashCloudflareDynamicTestRunningTasks += $TaskName
+    }
 }
 
 function Export-ScheduledTask {
@@ -120,9 +140,9 @@ function Get-ScheduledTask {
         )
     } else {
         @(
-            [PSCustomObject]@{ TaskName = "Clash Cloudflare Light Scan 30min" },
-            [PSCustomObject]@{ TaskName = "Clash Cloudflare Deep Scan 5000 6h" },
-            [PSCustomObject]@{ TaskName = "Clash Cloudflare Health Monitor 30min" }
+            [PSCustomObject]@{ TaskName = "Clash Cloudflare Light Scan 30min"; State = "Ready" },
+            [PSCustomObject]@{ TaskName = "Clash Cloudflare Deep Scan 5000 6h"; State = "Ready" },
+            [PSCustomObject]@{ TaskName = "Clash Cloudflare Health Monitor 30min"; State = "Ready" }
         )
     }
     if ($global:ClashCloudflareDynamicTestIncludeAggressiveWithHybrid -and
@@ -140,6 +160,11 @@ function Get-ScheduledTask {
     $Tasks = @($Tasks | Where-Object {
         $global:ClashCloudflareDynamicTestUnregisteredTasks -notcontains $_.TaskName
     })
+    foreach ($Task in $Tasks) {
+        if ($global:ClashCloudflareDynamicTestRunningTasks -contains $Task.TaskName) {
+            $Task.State = "Running"
+        }
+    }
     if ([string]::IsNullOrWhiteSpace($TaskName)) {
         return $Tasks
     }
@@ -172,6 +197,10 @@ $global:ClashCloudflareDynamicTestFailHybridTaskName = $null
 $global:ClashCloudflareDynamicTestMutationPaths = @()
 $global:ClashCloudflareDynamicTestFailUnregisterTaskName = $null
 $global:ClashCloudflareDynamicTestIncludeAggressiveWithHybrid = $false
+$global:ClashCloudflareDynamicTestRunningTasks = @()
+$global:ClashCloudflareDynamicTestStoppedTasks = @()
+$global:ClashCloudflareDynamicTestDisabledTasks = @()
+$global:ClashCloudflareDynamicTestStartedTasks = @()
 
 try {
     $env:LOCALAPPDATA = Join-Path $TestRoot "Local"
@@ -425,6 +454,8 @@ try {
     $InstalledProgramPath = Join-Path $InstallDir "dynamic_selector.py"
     [IO.File]::WriteAllText($InstalledProgramPath, "# preserve-on-backup-failure", $Utf8NoBom)
     $BeforeFailedInstallHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $InstalledProgramPath).Hash
+    $DisabledBeforeExportFailure = @($global:ClashCloudflareDynamicTestDisabledTasks).Count
+    $StoppedBeforeExportFailure = @($global:ClashCloudflareDynamicTestStoppedTasks).Count
     $global:ClashCloudflareDynamicTestExportFailure = $true
     $ExportFailureRaised = $false
     try {
@@ -437,6 +468,8 @@ try {
     Assert-Equal $true $ExportFailureRaised "计划任务备份失败未中止安装"
     $AfterFailedInstallHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $InstalledProgramPath).Hash
     Assert-Equal $BeforeFailedInstallHash $AfterFailedInstallHash "任务备份失败后仍覆盖了程序文件"
+    Assert-Equal $DisabledBeforeExportFailure @($global:ClashCloudflareDynamicTestDisabledTasks).Count "任务备份失败前错误禁用了现有任务"
+    Assert-Equal $StoppedBeforeExportFailure @($global:ClashCloudflareDynamicTestStoppedTasks).Count "任务备份失败前错误停止了现有任务"
     $BackupsAfterFailure = @(Get-ChildItem -LiteralPath (Join-Path $InstallDir "backups") -Directory)
     Assert-Equal 2 $BackupsAfterFailure.Count "任务备份失败后残留不完整备份目录"
 
@@ -458,6 +491,10 @@ try {
     }
     $global:ClashCloudflareDynamicTestMutationPaths = $RollbackPaths
     $global:ClashCloudflareDynamicTestFailHybridTaskName = "Clash Cloudflare Health Monitor 30min"
+    $global:ClashCloudflareDynamicTestRunningTasks = @(
+        "Clash Cloudflare Light Scan 30min"
+    )
+    $global:ClashCloudflareDynamicTestStartedTasks = @()
     $HybridFailureRaised = $false
     try {
         & $InstallScript
@@ -468,6 +505,7 @@ try {
         $global:ClashCloudflareDynamicTestMutationPaths = @()
     }
     Assert-Equal $true $HybridFailureRaised "混合任务注册失败后未报告回滚"
+    Assert-Equal $true ($global:ClashCloudflareDynamicTestStartedTasks -contains "Clash Cloudflare Light Scan 30min") "安装失败后未重启原先正在运行的任务"
     $HybridFailureRegistrations = @($global:ClashCloudflareDynamicTestRegisteredTasks | Select-Object -Skip $BeforeHybridFailureRegistrationCount)
     $RestoredTaskNames = @($HybridFailureRegistrations | Where-Object {
         -not [string]::IsNullOrWhiteSpace([string]$_.Xml)
@@ -722,6 +760,117 @@ try {
     Update-HealthIssueState $AlertState @() "Recovery" $false
     Assert-Equal 1 @($AlertState.active_issue_keys).Count "恢复通知失败后未保留重试状态"
 
+    # The release wizard uses this transactional path when the user chooses
+    # to replace protocol or credentials. Existing provider IPs must survive,
+    # while settings, template and generated Clash YAML change together.
+    $ReconfigureSource = Join-Path $TestRoot "reconfigure-source"
+    New-Item -ItemType Directory -Path $ReconfigureSource -Force | Out-Null
+    $ReconfigureSettings = [IO.File]::ReadAllText(
+        (Join-Path $ReleaseRoot "examples\settings.example.json")
+    ) | ConvertFrom-Json
+    $ReconfigureSettings.controller = "http://127.0.0.1:9292"
+    $ReconfigureSettings.secret = "fixture-reconfigure-secret"
+    $ReconfigureSettings.mixed_proxy = "http://127.0.0.1:7998"
+    $ReconfigureSettingsPath = Join-Path $ReconfigureSource "settings.json"
+    [IO.File]::WriteAllText(
+        $ReconfigureSettingsPath,
+        ($ReconfigureSettings | ConvertTo-Json -Depth 30),
+        $Utf8NoBom
+    )
+    $ReconfigureTemplate = [IO.File]::ReadAllText(
+        (Join-Path $ReleaseRoot "examples\node_template.trojan.example.json")
+    ) | ConvertFrom-Json
+    $ReconfigureTemplate.port = 2096
+    $ReconfigureTemplate.password = "fixture-reconfigure-password"
+    $ReconfigureTemplate.sni = "reconfigure.test.invalid"
+    $ReconfigureTemplate.'ws-opts'.path = "/reconfigure"
+    $ReconfigureTemplate.'ws-opts'.headers.Host = "reconfigure.test.invalid"
+    $ReconfigureTemplatePath = Join-Path $ReconfigureSource "node_template.json"
+    [IO.File]::WriteAllText(
+        $ReconfigureTemplatePath,
+        ($ReconfigureTemplate | ConvertTo-Json -Depth 30),
+        $Utf8NoBom
+    )
+    $ActiveIpsBeforeReconfigure = @(
+        ([IO.File]::ReadAllText($ActiveProviderPath) | ConvertFrom-Json).proxies |
+            ForEach-Object { [string]$_.server }
+    )
+    $DiscoveryIpsBeforeReconfigure = @(
+        ([IO.File]::ReadAllText($DiscoveryProviderPath) | ConvertFrom-Json).proxies |
+            ForEach-Object { [string]$_.server }
+    )
+    $ActiveProviderBytes = [IO.File]::ReadAllBytes($ActiveProviderPath)
+    $PreflightProtectedPaths = @(
+        $SettingsPath,
+        $NodeTemplatePath,
+        $ConfigPath,
+        $DiscoveryProviderPath
+    )
+    $PreflightProtectedHashes = @{}
+    foreach ($ProtectedPath in $PreflightProtectedPaths) {
+        $PreflightProtectedHashes[$ProtectedPath] = (
+            Get-FileHash -Algorithm SHA256 -LiteralPath $ProtectedPath
+        ).Hash
+    }
+    [IO.File]::WriteAllText($ActiveProviderPath, "not valid provider json", $Utf8NoBom)
+    $MalformedProviderRejected = $false
+    try {
+        & $InstallScript `
+            -SourceSettingsPath $ReconfigureSettingsPath `
+            -SourceNodeTemplatePath $ReconfigureTemplatePath `
+            -ReplaceInstalledConfiguration `
+            -NoOpenExplorer
+    } catch {
+        $MalformedProviderRejected = (
+            $_.Exception.Message -like "*重新配置已中止以免丢失原 IP*"
+        )
+    }
+    Assert-Equal $true $MalformedProviderRejected "损坏的现有 provider 未阻止重新配置"
+    Assert-Equal "not valid provider json" ([IO.File]::ReadAllText($ActiveProviderPath)) "provider 预检失败后仍改写了原文件"
+    foreach ($ProtectedPath in $PreflightProtectedPaths) {
+        Assert-Equal $PreflightProtectedHashes[$ProtectedPath] (Get-FileHash -Algorithm SHA256 -LiteralPath $ProtectedPath).Hash "provider 预检失败后修改了受保护文件：$ProtectedPath"
+    }
+    [IO.File]::WriteAllBytes($ActiveProviderPath, $ActiveProviderBytes)
+
+    $ReconfigureOutput = @(
+        $global:ClashCloudflareDynamicTestRunningTasks = @(
+            "Clash Cloudflare Light Scan 30min"
+        )
+        & $InstallScript `
+            -SourceSettingsPath $ReconfigureSettingsPath `
+            -SourceNodeTemplatePath $ReconfigureTemplatePath `
+            -ReplaceInstalledConfiguration `
+            -NoOpenExplorer
+    ) -join "`n"
+    Assert-Equal $true ($global:ClashCloudflareDynamicTestStoppedTasks -contains "Clash Cloudflare Light Scan 30min") "重新配置前未停止正在运行的扫描任务"
+    foreach ($TaskName in "Clash Cloudflare Light Scan 30min", "Clash Cloudflare Deep Scan 5000 6h", "Clash Cloudflare Health Monitor 30min") {
+        Assert-Equal $true ($global:ClashCloudflareDynamicTestDisabledTasks -contains $TaskName) "重新配置期间未禁用计划任务：$TaskName"
+    }
+    if ($ReconfigureOutput -match "fixture-reconfigure-(secret|password)") {
+        throw "重新配置输出泄露节点或 API 凭据"
+    }
+    $ReconfiguredSettings = [IO.File]::ReadAllText($SettingsPath) | ConvertFrom-Json
+    $ReconfiguredTemplate = [IO.File]::ReadAllText($NodeTemplatePath) | ConvertFrom-Json
+    Assert-Equal "http://127.0.0.1:9292" $ReconfiguredSettings.controller "重新配置未替换 controller"
+    Assert-Equal "fixture-reconfigure-secret" $ReconfiguredSettings.secret "重新配置未替换 secret"
+    Assert-Equal "http://127.0.0.1:7998" $ReconfiguredSettings.mixed_proxy "重新配置未替换 mixed proxy"
+    Assert-Equal "trojan" $ReconfiguredTemplate.type "重新配置未替换协议"
+    Assert-Equal 2096 $ReconfiguredTemplate.port "重新配置未替换端口"
+    $ReconfiguredYaml = [IO.File]::ReadAllText($ConfigPath)
+    if ($ReconfiguredYaml -notmatch "(?m)^mixed-port:\s*7998\s*$" -or
+        $ReconfiguredYaml -notmatch "(?m)^external-controller:\s*127\.0\.0\.1:9292\s*$") {
+        throw "重新配置未同步重建 Clash YAML"
+    }
+    $ReconfiguredActive = [IO.File]::ReadAllText($ActiveProviderPath) | ConvertFrom-Json
+    $ReconfiguredDiscovery = [IO.File]::ReadAllText($DiscoveryProviderPath) | ConvertFrom-Json
+    Assert-Equal ($ActiveIpsBeforeReconfigure -join ",") (@($ReconfiguredActive.proxies | ForEach-Object { $_.server }) -join ",") "重新配置未保留正式 provider IP"
+    Assert-Equal ($DiscoveryIpsBeforeReconfigure -join ",") (@($ReconfiguredDiscovery.proxies | ForEach-Object { $_.server }) -join ",") "重新配置未保留发现 provider IP"
+    foreach ($Proxy in @($ReconfiguredActive.proxies) + @($ReconfiguredDiscovery.proxies)) {
+        Assert-Equal "trojan" $Proxy.type "provider 未使用新协议重建"
+        Assert-Equal 2096 $Proxy.port "provider 未使用新端口重建"
+        Assert-Equal "fixture-reconfigure-password" $Proxy.password "provider 未使用新凭据重建"
+    }
+
     Write-Output "install_hybrid_5000.ps1 and health monitor isolation tests: OK"
 } finally {
     $env:LOCALAPPDATA = $OriginalLocalAppData
@@ -740,6 +889,10 @@ try {
     Remove-Variable -Name ClashCloudflareDynamicTestMutationPaths -Scope Global -ErrorAction SilentlyContinue
     Remove-Variable -Name ClashCloudflareDynamicTestFailUnregisterTaskName -Scope Global -ErrorAction SilentlyContinue
     Remove-Variable -Name ClashCloudflareDynamicTestIncludeAggressiveWithHybrid -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable -Name ClashCloudflareDynamicTestRunningTasks -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable -Name ClashCloudflareDynamicTestStoppedTasks -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable -Name ClashCloudflareDynamicTestDisabledTasks -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable -Name ClashCloudflareDynamicTestStartedTasks -Scope Global -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $TestRoot) {
         $ResolvedTestRoot = [IO.Path]::GetFullPath($TestRoot)
         $ResolvedTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

@@ -1,6 +1,9 @@
 ﻿#requires -Version 5.1
 param(
-    [switch]$NoOpenExplorer
+    [switch]$NoOpenExplorer,
+    [string]$SourceSettingsPath,
+    [string]$SourceNodeTemplatePath,
+    [switch]$ReplaceInstalledConfiguration
 )
 
 $ErrorActionPreference = "Stop"
@@ -373,31 +376,66 @@ function Install-ToastShortcut(
     Set-ShortcutAppUserModelId $ShortcutPath $AppUserModelId
 }
 
-function New-InitialProvider(
+function Get-ProviderIpv4Addresses([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return @()
+    }
+    try {
+        $Provider = Read-JsonObject $Path
+    } catch {
+        throw (
+            "无法读取现有 provider，重新配置已中止以免丢失原 IP：" +
+            "$Path；$($_.Exception.Message)"
+        )
+    }
+    $Addresses = New-Object System.Collections.Generic.List[string]
+    foreach ($Proxy in @($Provider.proxies)) {
+        $Ip = [string]$Proxy.server
+        $ParsedIp = $null
+        if ([Net.IPAddress]::TryParse($Ip, [ref]$ParsedIp) -and
+            $ParsedIp.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and
+            -not $Addresses.Contains($Ip)) {
+            [void]$Addresses.Add($Ip)
+        }
+    }
+    if ($Addresses.Count -eq 0) {
+        throw "现有 provider 未包含可保留的 IPv4，重新配置已中止：$Path"
+    }
+    return @($Addresses)
+}
+
+function Get-SeedIpv4Addresses([string]$SeedPath) {
+    $Addresses = New-Object System.Collections.Generic.List[string]
+    foreach ($Line in Get-Content -LiteralPath $SeedPath -Encoding UTF8) {
+        $Ip = $Line.Trim()
+        $ParsedIp = $null
+        if (-not $Ip -or $Ip.StartsWith("#") -or
+            -not [Net.IPAddress]::TryParse($Ip, [ref]$ParsedIp) -or
+            $ParsedIp.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
+            $Addresses.Contains($Ip)) {
+            continue
+        }
+        [void]$Addresses.Add($Ip)
+    }
+    return @($Addresses)
+}
+
+function New-ProviderFromAddresses(
     [string]$Path,
     [string]$Prefix,
     [string]$TemplatePath,
-    [string]$SeedPath
+    [string[]]$Addresses
 ) {
     $NodeTemplate = Read-JsonObject $TemplatePath
     $Nodes = @()
-    foreach ($Line in Get-Content -LiteralPath $SeedPath -Encoding UTF8) {
-        $Ip = $Line.Trim()
-        if (-not $Ip -or $Ip.StartsWith("#")) {
-            continue
-        }
-        $ParsedIp = $null
-        if (-not [Net.IPAddress]::TryParse($Ip, [ref]$ParsedIp) -or
-            $ParsedIp.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
-            continue
-        }
+    foreach ($Ip in $Addresses) {
         $Node = ($NodeTemplate | ConvertTo-Json -Depth 30) | ConvertFrom-Json
         Set-OrAddProperty $Node "name" "$Prefix | $Ip"
         Set-OrAddProperty $Node "server" $Ip
         $Nodes += $Node
     }
     if ($Nodes.Count -eq 0) {
-        throw "seed_ips.txt 中没有有效 IPv4 地址。"
+        throw "没有可用于初始化 provider 的 IPv4 地址。"
     }
     Write-JsonUtf8NoBom $Path ([PSCustomObject]@{ proxies = $Nodes })
 }
@@ -438,8 +476,18 @@ if ($IsRepositoryLayout) {
     $CoreSourceDir = $ScriptSourceDir
     $ConfigSourceDir = $ScriptSourceDir
 }
-$SourceSettingsPath = Join-Path $SourceRoot "settings.json"
-$SourceNodeTemplatePath = Join-Path $SourceRoot "node_template.json"
+$DefaultSourceSettingsPath = Join-Path $SourceRoot "settings.json"
+$DefaultSourceNodeTemplatePath = Join-Path $SourceRoot "node_template.json"
+if ([string]::IsNullOrWhiteSpace($SourceSettingsPath)) {
+    $SourceSettingsPath = $DefaultSourceSettingsPath
+} else {
+    $SourceSettingsPath = [IO.Path]::GetFullPath($SourceSettingsPath)
+}
+if ([string]::IsNullOrWhiteSpace($SourceNodeTemplatePath)) {
+    $SourceNodeTemplatePath = $DefaultSourceNodeTemplatePath
+} else {
+    $SourceNodeTemplatePath = [IO.Path]::GetFullPath($SourceNodeTemplatePath)
+}
 $SourceConfiguration = Assert-PublicConfigurationReady `
     -SettingsPath $SourceSettingsPath `
     -TemplatePath $SourceNodeTemplatePath
@@ -561,6 +609,14 @@ $ExistingManagedTaskNames = @(
     $ManagedTaskBackupNames.Keys |
         Where-Object { $ExistingTaskNames -contains $_ }
 )
+$PreviouslyRunningTaskNames = @(
+    $ExistingScheduledTasks |
+        Where-Object {
+            $ExistingManagedTaskNames -contains [string]$_.TaskName -and
+            [string]$_.State -eq "Running"
+        } |
+        ForEach-Object { [string]$_.TaskName }
+)
 
 $SettingsPath = Join-Path $InstallDir "settings.json"
 $NodeTemplatePath = Join-Path $InstallDir "node_template.json"
@@ -587,6 +643,19 @@ $ManagedFileEntries += @(
     [PSCustomObject]@{ Path = $ToastShortcutPath; BackupName = "Clash Cloudflare Dynamic.lnk"; Existed = Test-Path -LiteralPath $ToastShortcutPath -PathType Leaf }
 )
 $BackupDir = $null
+$DefaultSeedIps = @(Get-SeedIpv4Addresses $SeedSourcePath)
+$ActiveReconfigureIps = $DefaultSeedIps
+$DiscoveryReconfigureIps = $DefaultSeedIps
+if ($ReplaceInstalledConfiguration) {
+    $ExistingActiveIps = @(Get-ProviderIpv4Addresses $ActiveProviderPath)
+    $ExistingDiscoveryIps = @(Get-ProviderIpv4Addresses $DiscoveryProviderPath)
+    if ($ExistingActiveIps.Count -gt 0) {
+        $ActiveReconfigureIps = $ExistingActiveIps
+    }
+    if ($ExistingDiscoveryIps.Count -gt 0) {
+        $DiscoveryReconfigureIps = $ExistingDiscoveryIps
+    }
+}
 
 if ($ExistingInstall -or $ExistingToastShortcut -or $ExistingManagedTaskNames.Count -gt 0) {
     $Stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -626,7 +695,33 @@ if ($ExistingInstall -or $ExistingToastShortcut -or $ExistingManagedTaskNames.Co
 
 # 从第一次安装写入到任务迁移完成都属于同一事务。任务层先恢复原调度，
 # 外层再恢复安装前的每个受管文件；从未存在的文件只删除本轮创建项。
+$TasksQuiesced = $false
 try {
+    # 任务 XML 和关键文件完成备份后，才进入停机窗口。先禁用可避免
+    # 安装过程中恰逢下一触发点而重新启动；失败时外层回滚会恢复原 XML，
+    # 并重新启动安装前正在运行的任务。
+    $TasksQuiesced = $true
+    foreach ($TaskName in $ExistingManagedTaskNames) {
+        Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
+        $CurrentState = [string](
+            Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        ).State
+        if ($CurrentState -ne "Running") {
+            continue
+        }
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        $Deadline = [DateTime]::UtcNow.AddSeconds(30)
+        do {
+            Start-Sleep -Milliseconds 200
+            $CurrentState = [string](
+                Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+            ).State
+        } while ($CurrentState -eq "Running" -and [DateTime]::UtcNow -lt $Deadline)
+        if ($CurrentState -eq "Running") {
+            throw "无法在升级前停止计划任务：$TaskName"
+        }
+    }
+
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     foreach ($RuntimeSourceFile in $RuntimeSourceFiles) {
         $RuntimeSourcePath = $RuntimeSourceFile.SourcePath
@@ -661,7 +756,8 @@ try {
     }
 
     $DefaultSettings = $SourceSettings
-    if (Test-Path -LiteralPath $SettingsPath) {
+    if ((Test-Path -LiteralPath $SettingsPath) -and
+        -not $ReplaceInstalledConfiguration) {
         $Settings = Read-JsonObject $SettingsPath
         foreach ($Property in $DefaultSettings.PSObject.Properties) {
             if ($Settings.PSObject.Properties.Name -notcontains $Property.Name) {
@@ -675,29 +771,38 @@ try {
     }
     Write-JsonUtf8NoBom $SettingsPath $Settings
 
-    if (-not (Test-Path -LiteralPath $NodeTemplatePath)) {
-        Copy-Item -LiteralPath $SourceNodeTemplatePath -Destination $NodeTemplatePath
+    if ($ReplaceInstalledConfiguration -or
+        -not (Test-Path -LiteralPath $NodeTemplatePath)) {
+        if (-not [IO.Path]::GetFullPath($SourceNodeTemplatePath).Equals(
+            [IO.Path]::GetFullPath($NodeTemplatePath),
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+            Copy-Item -LiteralPath $SourceNodeTemplatePath -Destination $NodeTemplatePath
+        }
     }
-    if (-not (Test-Path -LiteralPath $ActiveProviderPath)) {
-        New-InitialProvider `
+    if ($ReplaceInstalledConfiguration -or
+        -not (Test-Path -LiteralPath $ActiveProviderPath)) {
+        New-ProviderFromAddresses `
             $ActiveProviderPath `
             "CF-A" `
             $NodeTemplatePath `
-            $SeedSourcePath
+            $ActiveReconfigureIps
     }
-    if (-not (Test-Path -LiteralPath $DiscoveryProviderPath)) {
-        New-InitialProvider `
+    if ($ReplaceInstalledConfiguration -or
+        -not (Test-Path -LiteralPath $DiscoveryProviderPath)) {
+        New-ProviderFromAddresses `
             $DiscoveryProviderPath `
             "CF-D" `
             $NodeTemplatePath `
-            $SeedSourcePath
+            $DiscoveryReconfigureIps
     }
 
     $TemplatePath = Join-Path $InstallDir "config.template.yaml"
     $ActivePath = "./providers/ClashCloudflareDynamic/cloudflare_active.yaml"
     $DiscoveryPath = "./providers/ClashCloudflareDynamic/cloudflare_discovery.yaml"
 
-    if (-not (Test-Path -LiteralPath $ConfigPath)) {
+    if ($ReplaceInstalledConfiguration -or
+        -not (Test-Path -LiteralPath $ConfigPath)) {
         $ControllerUri = [Uri][string]$Settings.controller
         $MixedProxyUri = [Uri][string]$Settings.mixed_proxy
         if (-not $ControllerUri.IsAbsoluteUri -or -not $MixedProxyUri.IsAbsoluteUri) {
@@ -827,57 +932,7 @@ try {
             }
         }
     } catch {
-        $RegistrationError = $_.Exception.Message
-        $RollbackErrors = New-Object System.Collections.Generic.List[string]
-        foreach ($TaskName in $ManagedTaskBackupNames.Keys) {
-            try {
-                if ($ExistingManagedTaskNames -contains $TaskName) {
-                    $TaskBackupPath = Join-Path $BackupDir $ManagedTaskBackupNames[$TaskName]
-                    if (-not (Test-Path -LiteralPath $TaskBackupPath -PathType Leaf)) {
-                        throw "缺少原任务备份：$TaskBackupPath"
-                    }
-                    $TaskXml = Get-Content -LiteralPath $TaskBackupPath -Raw -Encoding Unicode
-                    Register-ScheduledTask `
-                        -TaskName $TaskName `
-                        -Xml $TaskXml `
-                        -Force `
-                        -ErrorAction Stop | Out-Null
-                } else {
-                    $CurrentTaskNames = @(
-                        Get-ScheduledTask -ErrorAction Stop |
-                            ForEach-Object { [string]$_.TaskName }
-                    )
-                    if ($CurrentTaskNames -contains $TaskName) {
-                        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-                        Unregister-ScheduledTask `
-                            -TaskName $TaskName `
-                            -Confirm:$false `
-                            -ErrorAction Stop
-                    }
-                }
-            } catch {
-                [void]$RollbackErrors.Add("$TaskName：$($_.Exception.Message)")
-            }
-        }
-        try {
-            $RestoredTaskNames = @(
-                Get-ScheduledTask -ErrorAction Stop |
-                    ForEach-Object { [string]$_.TaskName }
-            )
-            foreach ($TaskName in $ManagedTaskBackupNames.Keys) {
-                $ShouldExist = $ExistingManagedTaskNames -contains $TaskName
-                $DoesExist = $RestoredTaskNames -contains $TaskName
-                if ($ShouldExist -ne $DoesExist) {
-                    [void]$RollbackErrors.Add("$TaskName：回滚后存在状态不一致")
-                }
-            }
-        } catch {
-            [void]$RollbackErrors.Add("回滚核验失败：$($_.Exception.Message)")
-        }
-        if ($RollbackErrors.Count -gt 0) {
-            throw "计划任务注册失败：$RegistrationError；回滚未完全成功：$($RollbackErrors -join '；')"
-        }
-        throw "计划任务注册失败，已恢复原调度：$RegistrationError"
+        throw "计划任务注册或迁移失败：$($_.Exception.Message)"
     }
 } catch {
     $InstallError = $_.Exception.Message
@@ -916,10 +971,78 @@ try {
             [void]$FileRollbackErrors.Add("$DirectoryPath：$($_.Exception.Message)")
         }
     }
-    if ($FileRollbackErrors.Count -gt 0) {
-        throw "$InstallError；文件回滚未完全成功：$($FileRollbackErrors -join '；')"
+
+    $TaskRollbackErrors = New-Object System.Collections.Generic.List[string]
+    if ($TasksQuiesced) {
+        foreach ($TaskName in $ManagedTaskBackupNames.Keys) {
+            try {
+                if ($ExistingManagedTaskNames -contains $TaskName) {
+                    if ([string]::IsNullOrWhiteSpace([string]$BackupDir)) {
+                        throw "缺少备份目录"
+                    }
+                    $TaskBackupPath = Join-Path $BackupDir $ManagedTaskBackupNames[$TaskName]
+                    if (-not (Test-Path -LiteralPath $TaskBackupPath -PathType Leaf)) {
+                        throw "缺少原任务备份：$TaskBackupPath"
+                    }
+                    $TaskXml = Get-Content -LiteralPath $TaskBackupPath -Raw -Encoding Unicode
+                    Register-ScheduledTask `
+                        -TaskName $TaskName `
+                        -Xml $TaskXml `
+                        -Force `
+                        -ErrorAction Stop | Out-Null
+                } else {
+                    $CurrentTask = @(
+                        Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+                    )
+                    if ($CurrentTask.Count -gt 0) {
+                        if ([string]$CurrentTask[0].State -eq "Running") {
+                            Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+                        }
+                        Unregister-ScheduledTask `
+                            -TaskName $TaskName `
+                            -Confirm:$false `
+                            -ErrorAction Stop
+                    }
+                }
+            } catch {
+                [void]$TaskRollbackErrors.Add("$TaskName：$($_.Exception.Message)")
+            }
+        }
+        foreach ($TaskName in $PreviouslyRunningTaskNames) {
+            try {
+                Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+            } catch {
+                [void]$TaskRollbackErrors.Add("$TaskName：无法恢复运行状态：$($_.Exception.Message)")
+            }
+        }
+        try {
+            $RestoredTaskNames = @(
+                Get-ScheduledTask -ErrorAction Stop |
+                    ForEach-Object { [string]$_.TaskName }
+            )
+            foreach ($TaskName in $ManagedTaskBackupNames.Keys) {
+                $ShouldExist = $ExistingManagedTaskNames -contains $TaskName
+                $DoesExist = $RestoredTaskNames -contains $TaskName
+                if ($ShouldExist -ne $DoesExist) {
+                    [void]$TaskRollbackErrors.Add("$TaskName：回滚后存在状态不一致")
+                }
+            }
+        } catch {
+            [void]$TaskRollbackErrors.Add("回滚核验失败：$($_.Exception.Message)")
+        }
     }
-    throw "$InstallError；已恢复安装前文件状态"
+
+    if ($FileRollbackErrors.Count -gt 0 -or $TaskRollbackErrors.Count -gt 0) {
+        $RollbackMessages = @()
+        if ($FileRollbackErrors.Count -gt 0) {
+            $RollbackMessages += "文件：$($FileRollbackErrors -join '；')"
+        }
+        if ($TaskRollbackErrors.Count -gt 0) {
+            $RollbackMessages += "任务：$($TaskRollbackErrors -join '；')"
+        }
+        throw "$InstallError；回滚未完全成功：$($RollbackMessages -join '；')"
+    }
+    throw "$InstallError；已恢复原调度；已恢复安装前文件状态"
 }
 
 Write-Host ""
