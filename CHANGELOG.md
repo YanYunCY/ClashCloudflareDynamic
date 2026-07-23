@@ -2,6 +2,20 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.3.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.0) — 2026-07-24
+
+- Windows 图形安装器从 WinForms 迁移到 WPF，改为接近 Windows 11“设置”的单页配置界面；
+- 新增“跟随系统 / 浅色 / 深色”外观面板；跟随系统时读取 Windows 应用主题，浅色和深色模式均复用系统强调色；
+- 增加轻量设置卡片、42 DIP 输入控件和更自然的纵向留白，改善旧版界面过于扁平的问题；
+- 外观标题与分段选择器分离，三种主题的选中态统一使用系统强调色；协议名称统一为 VMess，Mihomo 展开按钮改为右侧标准 chevron；
+- 左侧集中显示协议、端口、节点认证、SNI、Host 和 WebSocket 路径，Mihomo API、密钥与 Mixed Proxy 默认折叠；
+- 右侧使用较弱层级实时显示协议、端口、SNI、Host、路径和校验状态，UUID、密码和 API 密钥只显示“已设置”或“未设置”；
+- 窄于 1040 DIP 时自动收起摘要并把空间还给表单；表单独立滚动，底部操作栏始终固定；
+- 底部固定“取消”和“验证并安装”，配置不完整时标出并聚焦对应字段；
+- 启用 Per-Monitor V2 DPI、ClearType、布局像素对齐和 Segoe UI Variable 字体回退，并复核 100%、125%、150% 和 175% 缩放；
+- 深色滚动条使用透明轨道和细深灰滑块，悬停加宽、拖动时使用系统强调色；所有 WPF 窗口共用同一主题模板；
+- 已有安装选择、完成/错误提示和文件选择也迁移到 WPF；非交互安装、备份、凭据处理、计划任务和扫描核心逻辑保持不变。
+
 ## [v1.2.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.2.0) — 2026-07-23
 
 - 图形安装器改为“连接与协议 → 节点参数 → 确认安装”三步向导；

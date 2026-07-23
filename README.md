@@ -23,13 +23,16 @@ tools/privacy_check.py         发布前隐私检查
 
 `python tools/build_release.py` 会根据显式白名单生成 `dist/ClashCloudflareDynamic.zip`。压缩包采用便于 Windows 计划任务运行的平铺结构；`dist/` 不进入 Git。安装后的文件结构与源码仓库结构因此是两套明确分离的布局。
 
+`v1.3.0` 已把 Windows 安装器迁移为 WPF 单页界面：主配置位于左侧，脱敏实时摘要位于右侧，本地 Mihomo 连接设置默认折叠。界面支持“跟随系统 / 浅色 / 深色”，使用系统强调色、轻量设置卡片和响应式布局；窄窗口会收起摘要，表单可独立滚动且底部操作栏保持固定。安装器也针对 Per-Monitor V2 DPI、ClearType 和布局像素对齐做了专门处理。
+
 ## 版本与下载
 
 具体版本的 Release 页面只展示该版本；全部历史版本请打开 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
-| `v1.2.0` | 最新稳定版 | 三步现代安装向导、脱敏确认页、小屏与无障碍改进 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.2.0) |
+| `v1.3.0` | 最新稳定版 | WPF 单页安装器、三种外观、实时脱敏摘要与响应式布局 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.0) |
+| `v1.2.0` | 历史稳定版 | 三步现代安装向导、脱敏确认页、小屏与无障碍改进 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.2.0) |
 | `v1.1.0` | 历史稳定版 | Release 图形安装向导、升级保留与事务重配置 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.1.0) |
 | `v1.0.2` | 历史稳定版 | 阶段漏斗、失败与名额未入选分离、失败报告 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.2) |
 | `v1.0.1` | 历史稳定版 | 协议与端口写入 CSV、决策 JSON 和报告 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.1) |
@@ -77,7 +80,7 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 
 普通用户推荐使用图形向导：
 
-1. 从 [v1.2.0 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.2.0) 下载 `ClashCloudflareDynamic.zip`；
+1. 从 [v1.3.0 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.0) 下载 `ClashCloudflareDynamic.zip`；
 2. 完整解压 ZIP，不要直接在压缩包预览窗口中运行；
 3. 双击根目录的 `Install.cmd`；
 4. 选择 VMess、VLESS、Trojan 或自定义 Mihomo 模板，填写端口、API 和节点参数；

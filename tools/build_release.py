@@ -28,6 +28,7 @@ WINDOWS_FILES = (
     "install_aggressive_5000_30min.ps1",
     "install_hybrid_5000.ps1",
     "install_wizard.ps1",
+    "install_wizard_ui.ps1",
     "light_scan_200.bat",
     "notify_windows.ps1",
     "quick_test.bat",
