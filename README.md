@@ -29,7 +29,8 @@ tools/privacy_check.py         发布前隐私检查
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
-| `v1.0.2` | 最新稳定版 | 阶段漏斗、失败与名额未入选分离、失败报告 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.2) |
+| `v1.1.0` | 最新稳定版 | Release 图形安装向导、升级保留与事务重配置 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.1.0) |
+| `v1.0.2` | 历史稳定版 | 阶段漏斗、失败与名额未入选分离、失败报告 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.2) |
 | `v1.0.1` | 历史稳定版 | 协议与端口写入 CSV、决策 JSON 和报告 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.1) |
 | `v1.0.0` | 已被取代 | 首个公开版本，仅建议用于历史查阅 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.0) |
 
@@ -42,6 +43,7 @@ tools/privacy_check.py         发布前隐私检查
 - SQLite 避免短期重复抽样，并自动维护历史；
 - 真实代理链路验证，不以裸 IP 的 HTTP 测速代替节点验证；
 - VMess、VLESS、Trojan 示例和自定义 Mihomo 节点模板；
+- Release 内置可双击的 Windows 图形安装向导；
 - TCP 初筛自动跟随节点模板端口，不再写死为 443；
 - 发现、粗测、正式测速 CSV、决策 JSON 和通知报告记录协议与端口；
 - 每个最终候选连续测试 3 次，记录原始值、平均值、标准差和 CV；
@@ -70,9 +72,29 @@ tools/privacy_check.py         发布前隐私检查
 
 provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALAPPDATA%`。
 
-## 快速开始
+## Release 一键安装
 
-普通用户建议从 GitHub Release 下载 Windows 部署包。开发者从源码安装时，以下命令均在仓库根目录运行；部署包用户则去掉路径中的 `scripts\windows\`。
+普通用户推荐使用图形向导：
+
+1. 从 [v1.1.0 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.1.0) 下载 `ClashCloudflareDynamic.zip`；
+2. 完整解压 ZIP，不要直接在压缩包预览窗口中运行；
+3. 双击根目录的 `Install.cmd`；
+4. 选择 VMess、VLESS、Trojan 或自定义 Mihomo 模板，填写端口、API 和节点参数；
+5. 安装完成后，在 Clash Verge Rev 导入向导显示的 YAML，并选择 `节点选择 → 自动选择`。
+
+向导不会下载或执行网络上的安装脚本。UUID、密码和 API secret 使用掩码输入，只写入受控临时目录和本机安装目录；临时配置在安装成功或失败后都会清理，不会留在 Release 解压目录。
+
+检测到已有安装时：
+
+- 选择“是”：升级或修复程序，保留现有协议、端口和凭据；
+- 选择“否”：重新配置，安装器先事务备份，再替换设置、重建 Clash YAML，并用原 IP 列表重建 provider；
+- 选择“取消”：不修改安装。
+
+这是引导式一键安装，仍要求本机已安装 Python 3.10+、`pythonw.exe` 和 Clash Verge Rev。项目尚未使用代码签名证书，因此 Windows 可能显示未知发布者提示；请只从本仓库 Release 下载，并核对 Release 中公布的 SHA-256。
+
+## 手动安装（高级用户与开发者）
+
+开发者从源码安装时，以下命令均在仓库根目录运行；部署包用户则去掉路径中的 `scripts\windows\`。
 
 1. 选择协议和端口并创建本地配置。例如：
 
@@ -132,6 +154,8 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 `settings.json`、`node_template.json`、生成的 Clash YAML、provider、日志、数据库和通知报告均已列入 `.gitignore`。不要使用 `git add -f` 强制提交它们。
 
 隐私检查器也会检查被 Git 忽略但仍留在工作目录中的本地配置，并且只报告文件名和风险类别，不打印匹配到的凭据。制作 Release 压缩包时应从已审核的 Git 提交生成归档，不要直接压缩正在运行或测试过的工作目录。
+
+Git 已跟踪文件也会单独检查；即使使用 `git add -f`，备份、日志、provider 或本地配置进入 Git 后仍会导致隐私检查失败。
 
 提交或发布前运行：
 
@@ -215,6 +239,7 @@ Get-ChildItem .\src\clash_cloudflare_dynamic\*.py, .\tools\*.py | ForEach-Object
 $env:PYTHONPATH = Join-Path $PWD "src"
 python -W error::ResourceWarning -m unittest discover -s .\tests\python -p "test_*.py" -v
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_setup.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_install_wizard.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_install_hybrid.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_uninstall.ps1
 ```

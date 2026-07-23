@@ -2,6 +2,17 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.1.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.1.0) — 2026-07-23
+
+- Release 新增可双击的 `Install.cmd` 和 PowerShell 5.1 图形安装向导；
+- 内置 VMess、VLESS、Trojan 表单，并支持导入自定义 Mihomo JSON 模板；
+- 支持 Cloudflare 标准 HTTPS 端口和显式确认的自定义端口；
+- 已有安装默认升级并保留配置，也可事务性重新配置协议与凭据；
+- 重新配置时保留原 IP 列表，使用新模板重建 provider 和 Clash YAML；
+- 私有配置只进入受控临时目录和本机安装目录，安装结束后清理临时副本；
+- 安装前停止正在运行的受管任务，降低升级与扫描并发写入风险；
+- 隐私检查新增 Git 已跟踪敏感目录与文件的阻断规则。
+
 ## [v1.0.2](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.2) — 2026-07-23
 
 - 新增候选、TCP、真实代理链路、速度粗测和正式三轮测速的阶段漏斗；

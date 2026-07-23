@@ -13,6 +13,7 @@ Get-ChildItem .\src\clash_cloudflare_dynamic\*.py, .\tools\*.py | ForEach-Object
 $env:PYTHONPATH = Join-Path $PWD "src"
 python -W error::ResourceWarning -m unittest discover -s .\tests\python -p "test_*.py" -v
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_setup.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_install_wizard.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_install_hybrid.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_uninstall.ps1
 ```
