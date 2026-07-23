@@ -1,0 +1,17 @@
+{
+  "type": "vmess",
+  "port": 443,
+  "uuid": "00000000-0000-0000-0000-000000000000",
+  "alterId": 0,
+  "cipher": "auto",
+  "udp": true,
+  "tls": true,
+  "network": "ws",
+  "servername": "example.com",
+  "ws-opts": {
+    "path": "/your-websocket-path",
+    "headers": {
+      "Host": "example.com"
+    }
+  }
+}

@@ -1,0 +1,48 @@
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: true
+proxy-groups:
+- name: 自动选择
+  type: select
+  use:
+  - Cloudflare正式池
+- name: 手动选择
+  type: select
+  use:
+  - Cloudflare正式池
+- name: 发现测速
+  type: select
+  hidden: true
+  use:
+  - Cloudflare发现池
+- name: 节点选择
+  type: select
+  proxies:
+  - 自动选择
+  - 手动选择
+  - DIRECT
+rules:
+- DOMAIN,speed.cloudflare.com,发现测速
+- MATCH,节点选择
+external-controller: 127.0.0.1:9090
+secret: ''
+profile:
+  store-selected: true
+proxy-providers:
+  Cloudflare正式池:
+    type: file
+    path: __ACTIVE_PROVIDER_PATH__
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 1800
+      timeout: 6000
+      lazy: false
+      expected-status: 204
+  Cloudflare发现池:
+    type: file
+    path: __DISCOVERY_PROVIDER_PATH__
+    health-check:
+      enable: false

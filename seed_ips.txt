@@ -1,0 +1,6 @@
+# Neutral bootstrap addresses from Cloudflare's published IPv4 ranges.
+# They are only initial candidates and are replaced by local measurements.
+104.16.0.1
+104.17.0.1
+162.159.36.1
+172.64.0.1

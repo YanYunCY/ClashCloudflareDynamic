@@ -1,0 +1,14 @@
+{
+  "type": "trojan",
+  "port": 443,
+  "password": "replace-with-your-password",
+  "udp": true,
+  "sni": "example.com",
+  "network": "ws",
+  "ws-opts": {
+    "path": "/your-websocket-path",
+    "headers": {
+      "Host": "example.com"
+    }
+  }
+}
