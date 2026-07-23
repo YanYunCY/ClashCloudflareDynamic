@@ -39,6 +39,7 @@ SENSITIVE_DIRECTORIES = {
 TEXT_SUFFIXES = {
     "",
     ".bat",
+    ".cmd",
     ".json",
     ".md",
     ".ps1",
@@ -122,10 +123,10 @@ def git_tracked_files() -> set[str]:
             stderr=subprocess.DEVNULL,
             check=False,
         )
-    except OSError:
-        return set()
+    except OSError as exc:
+        raise RuntimeError("无法执行 git ls-files") from exc
     if result.returncode != 0:
-        return set()
+        raise RuntimeError("git ls-files 返回失败")
     return {
         item.decode("utf-8", errors="surrogateescape").replace("\\", "/")
         for item in result.stdout.split(b"\0")
@@ -170,6 +171,15 @@ def is_sensitive_file(path: Path) -> bool:
         or lowered.startswith("notification_") and lowered.endswith(".html")
         or lowered.startswith("clash_cloudflare_dynamic")
         and path.suffix.lower() in {".yaml", ".yml"}
+    )
+
+
+def is_sensitive_tracked_path(relative_path: Path) -> bool:
+    lowered_parts = {part.lower() for part in relative_path.parts[:-1]}
+    return bool(
+        lowered_parts.intersection(SENSITIVE_DIRECTORIES)
+        or is_sensitive_file(relative_path)
+        or relative_path in LOCAL_CONFIGS
     )
 
 
@@ -276,10 +286,19 @@ def check_gitignore(findings: set[tuple[str, str]]) -> None:
 
 def main() -> int:
     findings: set[tuple[str, str]] = set()
-    tracked = git_tracked_files()
-    for local_config in LOCAL_CONFIGS:
-        if local_config.as_posix() in tracked:
-            add_finding(findings, ROOT / local_config, "本地敏感配置被 Git 跟踪")
+    try:
+        tracked = git_tracked_files()
+    except RuntimeError:
+        tracked = set()
+        add_finding(findings, ROOT / ".git", "无法核验 Git 已跟踪文件")
+    for tracked_name in tracked:
+        tracked_path = Path(tracked_name)
+        if is_sensitive_tracked_path(tracked_path):
+            add_finding(
+                findings,
+                ROOT / tracked_path,
+                "敏感运行、配置或备份路径被 Git 跟踪",
+            )
 
     check_gitignore(findings)
     checked = 0

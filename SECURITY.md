@@ -30,6 +30,23 @@ git status --ignored --short
 ```
 
 The privacy checker inspects ignored local configuration as well as publishable
-files, but reports only the file name and finding category. Build release
+files and Git-tracked sensitive paths, but reports only the file name and
+finding category. Build release
 archives from a reviewed Git commit with `python tools/build_release.py`
 instead of zipping a configured worktree.
+
+## Release installer
+
+The Windows Release wizard writes newly entered credentials to a per-run
+directory under the current user's temporary directory and removes that
+directory in a `finally` block. It never writes credentials into the extracted
+Release directory and does not download or pipe remote scripts into
+PowerShell. Reconfiguration passes only temporary file paths to the
+transactional installer; secrets and node credentials are not command-line
+arguments or status output.
+
+Mihomo must read the installed node template and provider files, so credentials
+are necessarily stored in plaintext under the current user's LocalAppData and
+Roaming AppData trees, including managed rollback backups. Protect the Windows
+account and do not share those directories. Release scripts are not currently
+Authenticode-signed; verify the SHA-256 published with each GitHub Release.

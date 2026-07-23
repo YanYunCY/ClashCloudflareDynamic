@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+import io
+import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tools import privacy_check
@@ -65,6 +69,7 @@ class PrivacyCheckTests(unittest.TestCase):
         self.assertIsNotNone(privacy_check.PERSONAL_ACCOUNT_RE.search(account))
 
     def test_archives_backups_and_runtime_files_are_rejected(self) -> None:
+        self.assertIn(".cmd", privacy_check.TEXT_SUFFIXES)
         for name in (
             "release.zip",
             "settings.json.backup-20260723",
@@ -75,6 +80,75 @@ class PrivacyCheckTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue(privacy_check.is_sensitive_file(Path(name)))
         self.assertFalse(privacy_check.is_sensitive_file(Path("README.md")))
+
+    def test_tracked_sensitive_directories_are_rejected(self) -> None:
+        for name in (
+            "settings.json",
+            "backups/install-20260723/settings.json",
+            "logs/dynamic_selector.log",
+            "providers/cloudflare_active.yaml",
+            "src/__pycache__/module.pyc",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(
+                    privacy_check.is_sensitive_tracked_path(Path(name))
+                )
+        self.assertFalse(
+            privacy_check.is_sensitive_tracked_path(Path("examples/settings.example.json"))
+        )
+
+    def test_main_fails_when_backup_is_force_tracked(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            tracked_backup = root / "backups" / "install" / "settings.json"
+            tracked_backup.parent.mkdir(parents=True)
+            tracked_backup.write_text('{"secret":"fixture"}', encoding="utf-8")
+            output = io.StringIO()
+            with (
+                mock.patch.object(privacy_check, "ROOT", root),
+                mock.patch.object(
+                    privacy_check,
+                    "git_tracked_files",
+                    return_value={"backups/install/settings.json"},
+                ),
+                mock.patch.object(privacy_check, "check_gitignore"),
+                mock.patch.object(
+                    privacy_check,
+                    "iter_publishable_files",
+                    return_value=iter(()),
+                ),
+                redirect_stdout(output),
+            ):
+                result = privacy_check.main()
+
+        self.assertEqual(result, 1)
+        self.assertIn("backups/install/settings.json", output.getvalue())
+        self.assertNotIn("fixture", output.getvalue())
+
+    def test_main_fails_closed_when_git_inventory_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output = io.StringIO()
+            with (
+                mock.patch.object(privacy_check, "ROOT", root),
+                mock.patch.object(
+                    privacy_check,
+                    "git_tracked_files",
+                    side_effect=RuntimeError("fixture git failure"),
+                ),
+                mock.patch.object(privacy_check, "check_gitignore"),
+                mock.patch.object(
+                    privacy_check,
+                    "iter_publishable_files",
+                    return_value=iter(()),
+                ),
+                redirect_stdout(output),
+            ):
+                result = privacy_check.main()
+
+        self.assertEqual(result, 1)
+        self.assertIn("无法核验 Git 已跟踪文件", output.getvalue())
+        self.assertNotIn("fixture git failure", output.getvalue())
 
 
 if __name__ == "__main__":
