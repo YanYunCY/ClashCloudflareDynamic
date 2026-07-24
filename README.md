@@ -55,7 +55,7 @@ tools/privacy_check.py         发布前隐私检查
 - provider 原子更新、`.last-good` 回滚和 Mihomo 状态确认；
 - `pythonw.exe` 后台任务，不创建可见命令行窗口；
 - 静音高优先级 Windows 通知，点击查看独立 HTML 报告；
-- 日志轮转、备份清理、数据库损坏备份与恢复；
+- 日志轮转、通知报告数量上限、备份清理、数据库损坏备份与恢复；
 - 深扫前台繁忙延后和独立任务健康监控。
 
 ## 运行要求
@@ -221,6 +221,10 @@ Windows 通知和点击后打开的 HTML 报告按“候选 → TCP 可达 → �
 - `Clash Cloudflare Health Monitor 30min`
 
 扫描和健康监控均使用 `pythonw.exe`。健康监控启动器通过 `CREATE_NO_WINDOW` 调用 PowerShell，因此不会弹出空命令行窗口。
+
+## 通知报告与日志维护
+
+每条 Windows 通知都绑定独立 HTML，默认最多保留最新 100 份且不超过 30 天；任一条件超限时删除最旧报告。可用 `notification_report_max_files` 和 `notification_report_retention_days` 调整。主扫描日志默认达到 5 MB 后轮转并保留 3 份备份；通知投递日志、健康监控日志和健康监控启动器错误日志也会轮转，不会无限追加。通知投递日志默认每份 1 MB、保留 2 份备份，可用 `notification_delivery_log_max_bytes` 和 `notification_delivery_log_backups` 调整。
 
 ## 可选的激进模式
 

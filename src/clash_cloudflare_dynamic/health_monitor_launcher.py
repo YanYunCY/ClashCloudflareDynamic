@@ -10,11 +10,32 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 LAUNCH_LOG = ROOT / "logs" / "health_monitor_launcher.log"
+LAUNCH_LOG_MAX_BYTES = 1_000_000
+LAUNCH_LOG_BACKUPS = 2
+
+
+def rotate_launch_log_if_needed(
+    path: Path = LAUNCH_LOG,
+    max_bytes: int = LAUNCH_LOG_MAX_BYTES,
+    backups: int = LAUNCH_LOG_BACKUPS,
+) -> None:
+    maximum = max(1_024, int(max_bytes))
+    backup_count = max(1, min(20, int(backups)))
+    if not path.is_file() or path.stat().st_size < maximum:
+        return
+    oldest = path.with_name(f"{path.name}.{backup_count}")
+    oldest.unlink(missing_ok=True)
+    for index in range(backup_count - 1, 0, -1):
+        source = path.with_name(f"{path.name}.{index}")
+        if source.is_file():
+            os.replace(source, path.with_name(f"{path.name}.{index + 1}"))
+    os.replace(path, path.with_name(f"{path.name}.1"))
 
 
 def append_launch_error(message: str) -> None:
     try:
         LAUNCH_LOG.parent.mkdir(parents=True, exist_ok=True)
+        rotate_launch_log_if_needed(LAUNCH_LOG)
         with LAUNCH_LOG.open("a", encoding="utf-8") as stream:
             stream.write(message.rstrip() + "\n")
     except OSError:

@@ -2,6 +2,12 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## 未发布
+
+- 通知 HTML 在保留天数之外新增最大文件数限制，默认只保留最新 100 份，避免半小时任务长期产生上千个报告；
+- `notification_delivery.log` 和健康监控启动器错误日志新增按大小轮转，默认每份 1 MB、保留 2 份备份；
+- 通知脚本会一并清理超过一天的残留 HTML 临时文件，扫描、健康监控与通知脚本共用相同的保留上限。
+
 ## [v1.3.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.0) — 2026-07-24
 
 - Windows 图形安装器从 WinForms 迁移到 WPF，改为接近 Windows 11“设置”的单页配置界面；

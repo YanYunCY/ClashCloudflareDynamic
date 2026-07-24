@@ -518,6 +518,9 @@ function Send-HealthNotification(
         throw "PowerShell 5.1 解释器不存在：$PowerShell"
     }
     $RetentionDays = 30.0
+    $MaxReportFiles = 100
+    $DeliveryLogMaxBytes = 1000000
+    $DeliveryLogBackups = 2
     try {
         $Settings = [IO.File]::ReadAllText(
             (Join-Path $InstallRoot "settings.json")
@@ -530,8 +533,29 @@ function Send-HealthNotification(
                 [Math]::Max(1, $ConfiguredRetention)
             )
         }
+        if ($Settings.PSObject.Properties.Name -contains "notification_report_max_files") {
+            $MaxReportFiles = [Math]::Min(
+                10000,
+                [Math]::Max(1, [int]$Settings.notification_report_max_files)
+            )
+        }
+        if ($Settings.PSObject.Properties.Name -contains "notification_delivery_log_max_bytes") {
+            $DeliveryLogMaxBytes = [Math]::Max(
+                64000,
+                [long]$Settings.notification_delivery_log_max_bytes
+            )
+        }
+        if ($Settings.PSObject.Properties.Name -contains "notification_delivery_log_backups") {
+            $DeliveryLogBackups = [Math]::Min(
+                20,
+                [Math]::Max(1, [int]$Settings.notification_delivery_log_backups)
+            )
+        }
     } catch {
         $RetentionDays = 30.0
+        $MaxReportFiles = 100
+        $DeliveryLogMaxBytes = 1000000
+        $DeliveryLogBackups = 2
     }
     & $PowerShell `
         -NoLogo `
@@ -542,7 +566,10 @@ function Send-HealthNotification(
         -File $NotifyScript `
         -Title $Title `
         -Message $Message `
-        -RetentionDays $RetentionDays
+        -RetentionDays $RetentionDays `
+        -MaxReportFiles $MaxReportFiles `
+        -DeliveryLogMaxBytes $DeliveryLogMaxBytes `
+        -DeliveryLogBackups $DeliveryLogBackups
     if ($LASTEXITCODE -ne 0) {
         throw "通知脚本返回退出码 $LASTEXITCODE"
     }

@@ -91,6 +91,35 @@ class HealthMonitorLauncherTests(unittest.TestCase):
             self.assertEqual(result, 124)
             self.assertIn("等待超时", launch_log.read_text(encoding="utf-8"))
 
+    def test_launcher_error_log_keeps_only_bounded_backups(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            launch_log = Path(temp_dir) / "launcher.log"
+            launch_log.write_bytes(b"a" * 1024)
+            health_launcher.rotate_launch_log_if_needed(
+                launch_log, max_bytes=1024, backups=2
+            )
+            launch_log.write_bytes(b"b" * 1024)
+            health_launcher.rotate_launch_log_if_needed(
+                launch_log, max_bytes=1024, backups=2
+            )
+            launch_log.write_bytes(b"c" * 1024)
+            health_launcher.rotate_launch_log_if_needed(
+                launch_log, max_bytes=1024, backups=2
+            )
+
+            self.assertFalse(launch_log.exists())
+            self.assertEqual(
+                launch_log.with_name("launcher.log.1").read_bytes(),
+                b"c" * 1024,
+            )
+            self.assertEqual(
+                launch_log.with_name("launcher.log.2").read_bytes(),
+                b"b" * 1024,
+            )
+            self.assertEqual(
+                len(list(Path(temp_dir).glob("launcher.log.*"))), 2
+            )
+
 
 class MihomoPollingTests(unittest.TestCase):
     def test_mihomo_put_methods_forward_bounded_timeout(self):
@@ -1672,6 +1701,54 @@ class NotificationTests(unittest.TestCase):
             self.assertTrue(recent_report.exists())
             self.assertTrue(unrelated.exists())
 
+    def test_notification_report_cleanup_also_caps_recent_file_count(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_dir = Path(temp_dir)
+            baseline = time.time() - 60
+            reports = []
+            for index in range(5):
+                report = report_dir / f"notification_{index}.html"
+                report.write_text(str(index), encoding="utf-8")
+                stamp = baseline + index
+                os.utime(report, (stamp, stamp))
+                reports.append(report)
+            unrelated = report_dir / "manual_report.html"
+            unrelated.write_text("keep", encoding="utf-8")
+
+            with mock.patch.object(
+                selector, "NOTIFICATION_REPORT_DIR", report_dir
+            ):
+                deleted = selector.cleanup_notification_reports(30, 3)
+
+            self.assertEqual(deleted, 2)
+            self.assertEqual(
+                [path.name for path in reports if path.exists()],
+                ["notification_2.html", "notification_3.html", "notification_4.html"],
+            )
+            self.assertTrue(unrelated.exists())
+
+    def test_new_report_is_preserved_when_existing_files_have_future_times(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_dir = Path(temp_dir)
+            future = time.time() + 3600
+            for index in range(3):
+                report = report_dir / f"notification_future_{index}.html"
+                report.write_text(str(index), encoding="utf-8")
+                stamp = future + index
+                os.utime(report, (stamp, stamp))
+
+            with mock.patch.object(
+                selector, "NOTIFICATION_REPORT_DIR", report_dir
+            ):
+                created = selector.create_notification_report(
+                    "扫描完成", "保留当前报告", maximum_count=2
+                )
+
+            self.assertTrue(created.is_file())
+            self.assertEqual(
+                len(list(report_dir.glob("notification_*.html"))), 2
+            )
+
     def test_html_report_separates_funnel_failures_and_capacity_exclusions(self):
         summary = self._stage_funnel_summary()
         summary["fast_speed_ratio"] = 0.90
@@ -1936,6 +2013,13 @@ class NotificationTests(unittest.TestCase):
             command[retention_index + 1],
             str(selector.NOTIFICATION_REPORT_RETENTION_DAYS),
         )
+        expected_limits = {
+            "-MaxReportFiles": selector.NOTIFICATION_REPORT_MAX_FILES,
+            "-DeliveryLogMaxBytes": selector.NOTIFICATION_DELIVERY_LOG_MAX_BYTES,
+            "-DeliveryLogBackups": selector.NOTIFICATION_DELIVERY_LOG_BACKUPS,
+        }
+        for flag, expected in expected_limits.items():
+            self.assertEqual(command[command.index(flag) + 1], str(expected))
         options = run.call_args.kwargs
         self.assertEqual(command[0], "powershell.exe")
         self.assertIn("-File", command)
@@ -2007,7 +2091,11 @@ class NotificationTests(unittest.TestCase):
         self.assertIn("[Net.WebUtility]::HtmlEncode", script)
         self.assertIn("[IO.Path]::GetFullPath", script)
         self.assertIn("[double]$RetentionDays = 30", script)
+        self.assertIn("[int]$MaxReportFiles = 100", script)
         self.assertIn("[Math]::Min(3650, [Math]::Max(1, $RetentionDays))", script)
+        self.assertIn("Select-Object -First $DeleteCount", script)
+        self.assertIn("function Rotate-TextLog", script)
+        self.assertIn("-ProtectedPath $InitialProtectedPath", script)
         self.assertIn("AddDays(-$NormalizedRetentionDays)", script)
         self.assertNotIn("latest_notification.txt", script)
         self.assertIn('scenario="urgent"', script)

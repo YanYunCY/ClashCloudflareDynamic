@@ -10,7 +10,16 @@ param(
     [string]$DetailsPath,
 
     [Parameter(Mandatory = $false)]
-    [double]$RetentionDays = 30
+    [double]$RetentionDays = 30,
+
+    [Parameter(Mandatory = $false)]
+    [int]$MaxReportFiles = 100,
+
+    [Parameter(Mandatory = $false)]
+    [long]$DeliveryLogMaxBytes = 1000000,
+
+    [Parameter(Mandatory = $false)]
+    [int]$DeliveryLogBackups = 2
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,14 +30,87 @@ $DeliveryLogPath = Join-Path $LogDirectory "notification_delivery.log"
 $NotificationScenario = "urgent"
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-New-Item -ItemType Directory -Path $ReportDirectory -Force | Out-Null
-$NormalizedRetentionDays = [Math]::Min(3650, [Math]::Max(1, $RetentionDays))
-$RetentionCutoff = [DateTime]::UtcNow.AddDays(-$NormalizedRetentionDays)
-Get-ChildItem -LiteralPath $ReportDirectory -Filter "notification_*.html" -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.LastWriteTimeUtc -lt $RetentionCutoff } |
-    ForEach-Object {
-        Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+function Remove-OldNotificationReports {
+    param(
+        [string]$Directory,
+        [DateTime]$Cutoff,
+        [int]$MaximumCount,
+        [string]$ProtectedPath
+    )
+
+    Get-ChildItem -LiteralPath $Directory -Filter "notification_*.html" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTimeUtc -lt $Cutoff } |
+        ForEach-Object {
+            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+        }
+
+    $Reports = @(
+        Get-ChildItem -LiteralPath $Directory -Filter "notification_*.html" -File -ErrorAction SilentlyContinue |
+            Sort-Object -Property `
+                @{ Expression = "LastWriteTimeUtc"; Descending = $true }, `
+                @{ Expression = "Name"; Descending = $true }
+    )
+    if ($Reports.Count -gt $MaximumCount) {
+        $DeleteCount = $Reports.Count - $MaximumCount
+        $Reports |
+            Where-Object { $_.FullName -ine $ProtectedPath } |
+            Select-Object -First $DeleteCount |
+            ForEach-Object {
+                Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+            }
     }
+
+    $TempCutoff = [DateTime]::UtcNow.AddDays(-1)
+    Get-ChildItem -LiteralPath $Directory -Filter "notification_*.html.tmp" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTimeUtc -lt $TempCutoff } |
+        ForEach-Object {
+            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+        }
+}
+
+function Rotate-TextLog {
+    param(
+        [string]$Path,
+        [long]$MaximumBytes,
+        [int]$BackupCount
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+    $File = Get-Item -LiteralPath $Path
+    if ($File.Length -lt $MaximumBytes) {
+        return
+    }
+
+    $Oldest = "$Path.$BackupCount"
+    if (Test-Path -LiteralPath $Oldest -PathType Leaf) {
+        Remove-Item -LiteralPath $Oldest -Force
+    }
+    for ($Index = $BackupCount - 1; $Index -ge 1; $Index--) {
+        $Source = "$Path.$Index"
+        if (Test-Path -LiteralPath $Source -PathType Leaf) {
+            Move-Item -LiteralPath $Source -Destination "$Path.$($Index + 1)" -Force
+        }
+    }
+    Move-Item -LiteralPath $Path -Destination "$Path.1" -Force
+}
+
+New-Item -ItemType Directory -Path $ReportDirectory -Force | Out-Null
+$InitialProtectedPath = $null
+if (-not [string]::IsNullOrWhiteSpace($DetailsPath)) {
+    $InitialProtectedPath = [IO.Path]::GetFullPath($DetailsPath)
+}
+$NormalizedRetentionDays = [Math]::Min(3650, [Math]::Max(1, $RetentionDays))
+$NormalizedMaxReportFiles = [Math]::Min(10000, [Math]::Max(1, $MaxReportFiles))
+$NormalizedDeliveryLogMaxBytes = [Math]::Max(64000, $DeliveryLogMaxBytes)
+$NormalizedDeliveryLogBackups = [Math]::Min(20, [Math]::Max(1, $DeliveryLogBackups))
+$RetentionCutoff = [DateTime]::UtcNow.AddDays(-$NormalizedRetentionDays)
+Remove-OldNotificationReports `
+    -Directory $ReportDirectory `
+    -Cutoff $RetentionCutoff `
+    -MaximumCount $NormalizedMaxReportFiles `
+    -ProtectedPath $InitialProtectedPath
 
 $ReportRoot = [IO.Path]::GetFullPath($ReportDirectory) + [IO.Path]::DirectorySeparatorChar
 $ValidatedDetailsPath = $null
@@ -76,6 +158,15 @@ if ($null -eq $ValidatedDetailsPath) {
         }
     }
 }
+$CurrentReportPath = $ValidatedDetailsPath
+Remove-OldNotificationReports `
+    -Directory $ReportDirectory `
+    -Cutoff $RetentionCutoff `
+    -MaximumCount $NormalizedMaxReportFiles `
+    -ProtectedPath $CurrentReportPath
+if (-not (Test-Path -LiteralPath $CurrentReportPath -PathType Leaf)) {
+    throw "当前通知报告在保留数量清理后不存在"
+}
 $DetailsUri = ([Uri]::new($ValidatedDetailsPath)).AbsoluteUri
 
 [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
@@ -113,6 +204,10 @@ $Notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNoti
 )
 $Notifier.Show($Toast)
 try {
+    Rotate-TextLog `
+        -Path $DeliveryLogPath `
+        -MaximumBytes $NormalizedDeliveryLogMaxBytes `
+        -BackupCount $NormalizedDeliveryLogBackups
     $SafeTitle = ($Title -replace '[\r\n]+', ' ').Trim()
     $DeliveryLine = "[{0}] submitted app={1} scenario={2} title={3}{4}" -f `
         ([DateTimeOffset]::Now.ToString("o")), `

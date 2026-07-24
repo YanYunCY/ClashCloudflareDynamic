@@ -93,6 +93,9 @@ NOTIFY_SCRIPT_PATH = (
 NOTIFICATION_REPORT_DIR = LOG_DIR / "notification_reports"
 BACKUP_DIR = ROOT / "backups"
 NOTIFICATION_REPORT_RETENTION_DAYS = 30.0
+NOTIFICATION_REPORT_MAX_FILES = 100
+NOTIFICATION_DELIVERY_LOG_MAX_BYTES = 1_000_000
+NOTIFICATION_DELIVERY_LOG_BACKUPS = 2
 
 RUN_LOG_MAX_BYTES = 5_000_000
 RUN_LOG_BACKUPS = 3
@@ -172,11 +175,29 @@ class StageTimer:
 
 def configure_runtime_limits(settings: dict[str, Any]) -> None:
     global RUN_LOG_MAX_BYTES, RUN_LOG_BACKUPS
+    global NOTIFICATION_REPORT_MAX_FILES
+    global NOTIFICATION_DELIVERY_LOG_MAX_BYTES
+    global NOTIFICATION_DELIVERY_LOG_BACKUPS
     RUN_LOG_MAX_BYTES = max(
         100_000, int(settings.get("run_log_max_bytes", 5_000_000))
     )
     RUN_LOG_BACKUPS = max(
         1, min(20, int(settings.get("run_log_backups", 3)))
+    )
+    NOTIFICATION_REPORT_MAX_FILES = max(
+        1,
+        min(10_000, int(settings.get("notification_report_max_files", 100))),
+    )
+    NOTIFICATION_DELIVERY_LOG_MAX_BYTES = max(
+        64_000,
+        int(settings.get("notification_delivery_log_max_bytes", 1_000_000)),
+    )
+    NOTIFICATION_DELIVERY_LOG_BACKUPS = max(
+        1,
+        min(
+            20,
+            int(settings.get("notification_delivery_log_backups", 2)),
+        ),
     )
 
 
@@ -418,6 +439,12 @@ def send_windows_notification(
         message[:600],
         "-RetentionDays",
         str(NOTIFICATION_REPORT_RETENTION_DAYS),
+        "-MaxReportFiles",
+        str(NOTIFICATION_REPORT_MAX_FILES),
+        "-DeliveryLogMaxBytes",
+        str(NOTIFICATION_DELIVERY_LOG_MAX_BYTES),
+        "-DeliveryLogBackups",
+        str(NOTIFICATION_DELIVERY_LOG_BACKUPS),
     ]
     if details_path is not None:
         if notification_report_path_is_safe(details_path):
@@ -445,23 +472,48 @@ def send_windows_notification(
     return True
 
 
-def cleanup_notification_reports(retention_days: Any = 30) -> int:
+def cleanup_notification_reports(
+    retention_days: Any = 30,
+    maximum_count: Any = 100,
+    protected_path: Path | None = None,
+) -> int:
     try:
         days = min(3650.0, max(1.0, float(retention_days)))
     except (TypeError, ValueError):
         days = 30.0
+    try:
+        limit = min(10_000, max(1, int(maximum_count)))
+    except (TypeError, ValueError, OverflowError):
+        limit = 100
     if not NOTIFICATION_REPORT_DIR.is_dir():
         return 0
 
     cutoff = now().timestamp() - days * 86400
     deleted = 0
+    retained: list[tuple[float, str, Path]] = []
     for path in NOTIFICATION_REPORT_DIR.glob("notification_*.html"):
         try:
-            if path.is_file() and path.stat().st_mtime < cutoff:
+            if not path.is_file():
+                continue
+            modified = path.stat().st_mtime
+            if modified < cutoff:
                 path.unlink()
                 deleted += 1
+            else:
+                retained.append((modified, path.name, path))
         except OSError as exc:
             log(f"清理过期通知报告失败：{path.name}：{exc}")
+
+    excess = max(0, len(retained) - limit)
+    deletion_candidates = [
+        item for item in sorted(retained) if item[2] != protected_path
+    ]
+    for _, _, path in deletion_candidates[:excess]:
+        try:
+            path.unlink()
+            deleted += 1
+        except OSError as exc:
+            log(f"清理超额通知报告失败：{path.name}：{exc}")
     return deleted
 
 
@@ -651,13 +703,19 @@ def create_notification_report(
     ranked: list[dict[str, Any]] | None = None,
     failed_rows: list[dict[str, Any]] | None = None,
     retention_days: Any = 30,
+    maximum_count: Any = None,
 ) -> Path:
     decision = decision or {}
     summary = summary or {}
     ranked = ranked or []
     failed_rows = failed_rows or []
     NOTIFICATION_REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    cleanup_notification_reports(retention_days)
+    report_limit = (
+        NOTIFICATION_REPORT_MAX_FILES
+        if maximum_count is None
+        else maximum_count
+    )
+    cleanup_notification_reports(retention_days, report_limit)
 
     timestamp = now()
     filename = (
@@ -941,6 +999,9 @@ def create_notification_report(
             temp_path.unlink(missing_ok=True)
         except OSError:
             pass
+    cleanup_notification_reports(
+        retention_days, report_limit, protected_path=report_path
+    )
     return report_path
 
 
@@ -3791,6 +3852,9 @@ def main() -> int:
                 retention_days=settings.get(
                     "notification_report_retention_days", 30
                 ),
+                maximum_count=settings.get(
+                    "notification_report_max_files", 100
+                ),
             )
         except Exception as exc:
             log(f"生成完整通知报告失败，改用简版报告：{exc}")
@@ -3854,6 +3918,9 @@ def main() -> int:
                     failed_rows=failure_rows,
                     retention_days=settings.get(
                         "notification_report_retention_days", 30
+                    ),
+                    maximum_count=settings.get(
+                        "notification_report_max_files", 100
                     ),
                 )
             except Exception as report_exc:
