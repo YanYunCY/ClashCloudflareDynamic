@@ -11,6 +11,12 @@
 - README 顶部新增 CI/Release/License 徽章与英文 TL;DR；
 - 新增 issue 模板（bug 报告、功能请求）与 PR 模板，日志粘贴处提醒先脱敏。
 
+Windows 部署包 SHA-256：
+
+```text
+3727F02CA2E3A0A1A808BC7C418A9D494C7AC4868AAF42C3146BCD1CE5E464A3
+```
+
 ## [v1.3.3](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.3) — 2026-07-24
 
 - 速度粗测阶段对单节点选择确认超时增加容错，失败节点跳过继续测试而不再中止整轮扫描；
