@@ -111,6 +111,56 @@ function ConvertTo-HealthTime($Value) {
     return $null
 }
 
+function Get-HealthRunStatus([string]$InstallRoot, [string]$Mode) {
+    $FileName = if ($Mode -eq "light") {
+        "last_run_light.json"
+    } else {
+        "last_run_deep.json"
+    }
+    $Path = Join-Path (Join-Path $InstallRoot "logs") $FileName
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+    try {
+        $Text = [IO.File]::ReadAllText($Path)
+        if ([string]::IsNullOrWhiteSpace($Text)) {
+            throw "心跳文件为空"
+        }
+        $Payload = $Text | ConvertFrom-Json
+        $Status = [string]$Payload.status
+        $PayloadMode = [string]$Payload.mode
+        $CompletedAt = ConvertTo-HealthTime $Payload.completed_at
+        if ($Status -notin @("success", "skipped", "failed")) {
+            throw "未知状态：$Status"
+        }
+        if ($PayloadMode -ne $Mode) {
+            throw "模式不匹配：$PayloadMode"
+        }
+        if ($null -eq $CompletedAt) {
+            throw "完成时间无效"
+        }
+        return [PSCustomObject]@{
+            Valid = $true
+            Path = $Path
+            Status = $Status
+            CompletedAt = $CompletedAt
+            Reason = [string]$Payload.reason
+            ScanSummary = $Payload.scan_summary
+            Error = $null
+        }
+    } catch {
+        return [PSCustomObject]@{
+            Valid = $false
+            Path = $Path
+            Status = ""
+            CompletedAt = $null
+            Reason = ""
+            ScanSummary = $null
+            Error = $_.Exception.Message
+        }
+    }
+}
+
 function Format-HealthDuration([TimeSpan]$Duration) {
     if ($Duration.TotalHours -ge 1) {
         return ("{0:F1} 小时" -f $Duration.TotalHours)
@@ -440,7 +490,46 @@ function Get-HealthAssessment(
             }
         }
         $IsRunning = [string]$Snapshot.State -eq "Running"
-        if ($null -ne $LastRun -and $LastRun.Year -ge 2000 -and
+        $RunStatus = Get-HealthRunStatus $InstallRoot $Mode
+        $MayUseTaskResultAsSuccess = $null -eq $RunStatus
+        if ($null -ne $RunStatus) {
+            if (-not [bool]$RunStatus.Valid) {
+                $Issues += [PSCustomObject]@{
+                    Key = "scan.$Mode.heartbeat_invalid"
+                    Message = "$Label 扫描心跳无效：$($RunStatus.Error)"
+                }
+            } elseif ([string]$RunStatus.Status -eq "success") {
+                $KnownSuccess = ConvertTo-HealthTime $State.last_success.$Mode
+                if ($null -eq $KnownSuccess -or $RunStatus.CompletedAt -gt $KnownSuccess) {
+                    Set-HealthProperty $State.last_success $Mode $RunStatus.CompletedAt.ToString("o")
+                }
+                $Passed = 0
+                $PoolSize = 0
+                try {
+                    $Passed = [int]$RunStatus.ScanSummary.speed_passed_count
+                    $PoolSize = [int]$RunStatus.ScanSummary.active_pool_size
+                } catch {
+                    $Passed = 0
+                    $PoolSize = 0
+                }
+                if ($Passed -lt 1 -or $PoolSize -lt 1) {
+                    $Issues += [PSCustomObject]@{
+                        Key = "scan.$Mode.quality"
+                        Message = (
+                            "$Label 最近完成但结果质量异常：正式测速通过 $Passed，正式池 $PoolSize"
+                        )
+                    }
+                }
+            } elseif ([string]$RunStatus.Status -eq "failed") {
+                $Issues += [PSCustomObject]@{
+                    Key = "scan.$Mode.reported_failed"
+                    Message = "$Label 扫描心跳报告失败：$($RunStatus.Reason)"
+                }
+            }
+            # skipped intentionally does not refresh last_success.
+        }
+        if ($MayUseTaskResultAsSuccess -and
+            $null -ne $LastRun -and $LastRun.Year -ge 2000 -and
             $null -ne $ResultValue -and $ResultValue -eq 0 -and -not $IsRunning) {
             $KnownSuccess = ConvertTo-HealthTime $State.last_success.$Mode
             if ($null -eq $KnownSuccess -or $LastRun -gt $KnownSuccess) {

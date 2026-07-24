@@ -81,6 +81,8 @@ LATEST_CSV = LOG_DIR / "latest.csv"
 DISCOVERY_CSV = LOG_DIR / "discovery_tcp.csv"
 SPEED_PROBE_CSV = LOG_DIR / "speed_probe.csv"
 DECISION_JSON = LOG_DIR / "last_decision.json"
+LIGHT_RUN_STATUS_PATH = LOG_DIR / "last_run_light.json"
+DEEP_RUN_STATUS_PATH = LOG_DIR / "last_run_deep.json"
 BEST_IPS_PATH = LOG_DIR / "best_ips.txt"
 HISTORY_PATH = LOG_DIR / "history.csv"
 RUN_LOCK_PATH = ROOT / "dynamic_selector.lock"
@@ -1222,6 +1224,56 @@ def save_json_atomic(path: Path, value: Any) -> None:
     os.replace(tmp, path)
 
 
+def write_run_status(
+    quick: bool,
+    status: str,
+    started_at: str,
+    *,
+    reason: str = "",
+    summary: dict[str, Any] | None = None,
+) -> Path:
+    """Persist the latest actual scan outcome for the health monitor.
+
+    Task Scheduler reports exit code 0 for intentional skips. A separate
+    per-mode heartbeat prevents those skips from masquerading as completed
+    scans and carries enough result data for basic quality validation.
+    """
+    normalized_status = str(status).strip().lower()
+    if normalized_status not in {"success", "skipped", "failed"}:
+        raise ValueError(f"未知运行状态：{status}")
+    path = LIGHT_RUN_STATUS_PATH if quick else DEEP_RUN_STATUS_PATH
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "mode": "light" if quick else "deep",
+        "status": normalized_status,
+        "started_at": started_at,
+        "completed_at": now_iso(),
+        "reason": str(reason),
+    }
+    if isinstance(summary, dict):
+        payload["scan_summary"] = summary
+    save_json_atomic(path, payload)
+    return path
+
+
+def try_write_run_status(
+    quick: bool,
+    status: str,
+    started_at: str,
+    *,
+    reason: str = "",
+    summary: dict[str, Any] | None = None,
+) -> bool:
+    try:
+        write_run_status(
+            quick, status, started_at, reason=reason, summary=summary
+        )
+        return True
+    except (OSError, TypeError, ValueError) as exc:
+        log(f"写入扫描心跳失败：{exc}")
+        return False
+
+
 def try_acquire_run_lock() -> Any | None:
     """Prevent the light and deep scheduled tasks from running together."""
     RUN_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -2198,7 +2250,15 @@ def load_historical_ips(limit: int) -> list[str]:
     return result
 
 
-def load_historical_speed_scores() -> dict[str, float]:
+def load_historical_speed_scores(
+    samples_per_ip: int = 5, stability_penalty: float = 0.25
+) -> dict[str, float]:
+    """Return a recent multi-run speed reputation for probe selection.
+
+    A single latest peak is too noisy for deciding which historical nodes earn
+    scarce probe slots. Recent samples receive exponentially higher weight and
+    unstable histories are penalized by their coefficient of variation.
+    """
     if not HISTORY_PATH.exists():
         return {}
     try:
@@ -2206,15 +2266,40 @@ def load_historical_speed_scores() -> dict[str, float]:
             rows = list(csv.DictReader(f))
     except OSError:
         return {}
-    result: dict[str, float] = {}
+    sample_limit = max(1, min(20, int(samples_per_ip)))
+    penalty_factor = max(0.0, min(2.0, float(stability_penalty)))
+    samples: dict[str, list[float]] = {}
     for row in reversed(rows):
         ip = str(row.get("ip", ""))
-        if ip in result:
+        values = samples.setdefault(ip, [])
+        if len(values) >= sample_limit:
             continue
         try:
-            result[ip] = float(row.get("speed_Mbps", 0))
+            speed = float(row.get("speed_Mbps", 0))
         except (TypeError, ValueError):
             continue
+        if not math.isfinite(speed) or speed <= 0:
+            continue
+        values.append(speed)
+
+    result: dict[str, float] = {}
+    for ip, values in samples.items():
+        if not values:
+            continue
+        weights = [0.70 ** index for index in range(len(values))]
+        weighted_speed = sum(
+            speed * weight for speed, weight in zip(values, weights)
+        ) / sum(weights)
+        mean_speed = statistics.fmean(values)
+        speed_cv = (
+            statistics.pstdev(values) / max(mean_speed, 0.001)
+            if len(values) > 1
+            else 0.0
+        )
+        result[ip] = round(
+            weighted_speed / (1.0 + min(speed_cv, 2.0) * penalty_factor),
+            4,
+        )
     return result
 
 
@@ -2268,7 +2353,10 @@ def select_speed_probe_names(
             break
         add(name, "low_latency")
 
-    historical_scores = load_historical_speed_scores()
+    historical_scores = load_historical_speed_scores(
+        int(settings.get("historical_speed_samples_per_ip", 5)),
+        float(settings.get("historical_speed_stability_penalty", 0.25)),
+    )
     historical_names = sorted(
         (
             name
@@ -2757,6 +2845,167 @@ def repeated_speed_test(
     return result_summary
 
 
+def summarize_speed_test_rounds(
+    round_results: list[dict[str, Any] | None],
+    repeats: int,
+    require_all_repeats: bool,
+) -> dict[str, Any]:
+    """Aggregate executed, failed and skipped download-test rounds."""
+    repeats = max(1, int(repeats))
+    normalized = list(round_results[:repeats])
+    if len(normalized) < repeats:
+        normalized.extend([None] * (repeats - len(normalized)))
+
+    runs: list[dict[str, Any]] = []
+    errors: list[str] = []
+    speed_samples: list[str] = []
+    ttfb_samples: list[str] = []
+    run_errors: list[str] = []
+    executed_runs = 0
+    skipped_runs = 0
+    timeout_runs = 0
+
+    for round_index, result in enumerate(normalized, 1):
+        if result is None:
+            skipped_runs += 1
+            speed_samples.append("SKIP")
+            ttfb_samples.append("SKIP")
+            continue
+        executed_runs += 1
+        if result.get("timed_out"):
+            timeout_runs += 1
+        if result.get("ok"):
+            runs.append(result)
+            speed_samples.append(
+                f"{float(result.get('speed_Mbps', 0.0)):.2f}"
+            )
+            ttfb_samples.append(
+                f"{float(result.get('ttfb_ms', 0.0)):.2f}"
+            )
+            continue
+        error = str(result.get("error", "未知错误"))
+        errors.append(error)
+        speed_samples.append("FAIL")
+        ttfb_samples.append("FAIL")
+        run_errors.append(f"{round_index}:{error}")
+
+    minimum_successes = repeats if require_all_repeats else max(1, repeats - 1)
+    enough_successes = len(runs) >= minimum_successes
+    result_summary: dict[str, Any] = {
+        "ok": enough_successes,
+        "successful_runs": len(runs),
+        "attempted_runs": executed_runs,
+        "planned_runs": repeats,
+        "skipped_runs": skipped_runs,
+        "timeout_runs": timeout_runs,
+        "speed_samples_Mbps": ",".join(speed_samples),
+        "ttfb_samples_ms": ",".join(ttfb_samples),
+        "run_errors": "；".join(run_errors),
+        "error": "" if enough_successes else (
+            f"成功 {len(runs)}/{repeats} 次；"
+            + ("；".join(errors) if errors else "有效次数不足")
+        ),
+    }
+    if not runs:
+        return result_summary
+
+    speed_values = [float(x["speed_Mbps"]) for x in runs]
+    speed_mb_values = [
+        float(x.get("speed_MB_per_s", x.get("speed_MBps", 0)))
+        for x in runs
+    ]
+    ttfb_values = [float(x["ttfb_ms"]) for x in runs]
+    total_values = [float(x["total_ms"]) for x in runs]
+    mean_speed = statistics.fmean(speed_values)
+    speed_stddev = (
+        statistics.pstdev(speed_values) if len(speed_values) > 1 else 0.0
+    )
+    result_summary.update({
+        "speed_Mbps": round(mean_speed, 2),
+        "speed_MB_per_s": round(statistics.fmean(speed_mb_values), 2),
+        "ttfb_ms": round(statistics.fmean(ttfb_values), 2),
+        "total_ms": round(statistics.fmean(total_values), 2),
+        "speed_stddev_Mbps": round(speed_stddev, 2),
+        "speed_cv": round(speed_stddev / max(mean_speed, 0.001), 4),
+        "ttfb_stddev_ms": round(
+            statistics.pstdev(ttfb_values) if len(ttfb_values) > 1 else 0.0,
+            2,
+        ),
+    })
+    return result_summary
+
+
+def build_interleaved_round_orders(
+    node_names: list[str], repeats: int, rng: random.Random
+) -> list[list[str]]:
+    """Build balanced per-round orders for fair comparison over time."""
+    unique_names = list(dict.fromkeys(node_names))
+    repeats = max(1, int(repeats))
+    if not unique_names:
+        return [[] for _ in range(repeats)]
+    base = list(unique_names)
+    rng.shuffle(base)
+    count = len(base)
+    orders: list[list[str]] = []
+    for round_index in range(repeats):
+        offset = (round_index * count) // repeats
+        order = base[offset:] + base[:offset]
+        if round_index % 2 == 1:
+            order.reverse()
+        orders.append(order)
+    return orders
+
+
+def interleaved_speed_tests(
+    node_names: list[str],
+    run_one: Any,
+    repeats: int,
+    repeat_interval_seconds: float,
+    require_all_repeats: bool,
+    rng: random.Random,
+) -> dict[str, dict[str, Any]]:
+    """Run one download measurement per candidate per round."""
+    repeats = max(1, int(repeats))
+    names = list(dict.fromkeys(node_names))
+    results: dict[str, list[dict[str, Any] | None]] = {
+        name: [] for name in names
+    }
+    failed: set[str] = set()
+    orders = build_interleaved_round_orders(names, repeats, rng)
+
+    for round_index, order in enumerate(orders, 1):
+        log(f"交错正式测速第 {round_index}/{repeats} 轮：{len(order)} 个候选")
+        for node_name in order:
+            if require_all_repeats and node_name in failed:
+                results[node_name].append(None)
+                log(f"{node_name} 第 {round_index}/{repeats} 次：SKIP")
+                continue
+            result = run_one(node_name, round_index)
+            results[node_name].append(result)
+            if result.get("ok"):
+                log(
+                    f"{node_name} 第 {round_index}/{repeats} 次："
+                    f"{result.get('speed_Mbps', 0)} Mbps，"
+                    f"TTFB {result.get('ttfb_ms', 0)} ms"
+                )
+            else:
+                error = str(result.get("error", "未知错误"))
+                log(
+                    f"{node_name} 第 {round_index}/{repeats} 次失败：{error}"
+                )
+                if require_all_repeats:
+                    failed.add(node_name)
+        if round_index < repeats:
+            time.sleep(max(0.0, float(repeat_interval_seconds)))
+
+    return {
+        name: summarize_speed_test_rounds(
+            results[name], repeats, require_all_repeats
+        )
+        for name in names
+    }
+
+
 def normalize_fast_speed_ratio(value: Any) -> float:
     try:
         ratio = float(value)
@@ -2900,6 +3149,7 @@ def build_active_pool(
     current_ip: str | None,
     pool_size: int,
     excluded_ips: set[str] | None = None,
+    allow_delay_only_backfill: bool = False,
 ) -> list[str]:
     result: list[str] = []
     excluded = excluded_ips or set()
@@ -2912,10 +3162,11 @@ def build_active_pool(
     add(current_ip)
     for row in ranked:
         add(row["ip"])
-    for node_name, _ in sorted(delays.items(), key=lambda x: x[1]):
-        add(ip_from_node_name(node_name))
     for ip in previous_active:
         add(ip)
+    if allow_delay_only_backfill:
+        for node_name, _ in sorted(delays.items(), key=lambda x: x[1]):
+            add(ip_from_node_name(node_name))
     return result[:pool_size]
 
 
@@ -3151,6 +3402,7 @@ def main() -> int:
     failure_rows: list[dict[str, Any]] = []
     current_ip = ""
     run_started = time.monotonic()
+    run_started_at = now_iso()
     stage = "加载配置"
     deferred_count = 0
     timeout_counts = {
@@ -3198,6 +3450,12 @@ def main() -> int:
         enter_stage("等待前台空闲", "startup")
         deferred_result = defer_deep_scan_if_busy(settings, args.quick)
         if deferred_result is None:
+            try_write_run_status(
+                args.quick,
+                "skipped",
+                run_started_at,
+                reason="前台持续繁忙，本轮深度扫描已跳过",
+            )
             return 0
         deferred_count = deferred_result
 
@@ -3224,6 +3482,9 @@ def main() -> int:
             send_windows_notification(
                 f"Clash {mode}扫描：本轮已跳过",
                 message,
+            )
+            try_write_run_status(
+                args.quick, "skipped", run_started_at, reason=message
             )
             return 0
 
@@ -3531,34 +3792,61 @@ def main() -> int:
         maximum_speed_cv = max(
             0.0, float(settings.get("maximum_speed_cv", 0.45))
         )
+        speed_repeats = int(settings.get("speed_repeats", 3))
+        require_all_speed_repeats = bool(
+            settings.get("require_all_repeats", True)
+        )
         for index, node_name in enumerate(candidate_names, 1):
             ip = ip_from_node_name(node_name)
             if not ip:
                 continue
             log(
-                f"实际下载测速 {index}/{len(candidate_names)}："
+                f"正式测速候选 {index}/{len(candidate_names)}："
                 f"{ip}（三轮平均代理延迟 {delays[node_name]} ms，"
                 f"原始值 {delay_samples.get(node_name, [])}）"
             )
-            select_proxy_and_wait(
-                api,
-                str(settings["discovery_group"]),
-                node_name,
-                settings.get("selector_confirm_timeout_seconds", 3.0),
-                settings.get("mihomo_poll_interval_seconds", 0.05),
-                timeout_observer=lambda: record_timeout("formal_speed"),
-            )
-            result = repeated_speed_test(
+
+        def run_formal_speed_round(
+            node_name: str, round_index: int
+        ) -> dict[str, Any]:
+            try:
+                select_proxy_and_wait(
+                    api,
+                    str(settings["discovery_group"]),
+                    node_name,
+                    settings.get("selector_confirm_timeout_seconds", 3.0),
+                    settings.get("mihomo_poll_interval_seconds", 0.05),
+                    timeout_observer=lambda: record_timeout("formal_speed"),
+                )
+            except MihomoConfirmationTimeout as exc:
+                return {
+                    "ok": False,
+                    # The observer above already records this control-plane timeout.
+                    "timed_out": False,
+                    "error": f"节点选择确认失败：{exc}",
+                }
+            return speed_test(
                 curl_bin,
                 str(settings["mixed_proxy"]),
                 str(settings["speed_test_base_url"]),
                 int(settings["speed_test_bytes"]),
                 float(settings["speed_timeout_seconds"]),
-                int(settings.get("speed_repeats", 3)),
-                float(settings.get("speed_repeat_interval_seconds", 0.5)),
-                bool(settings.get("require_all_repeats", True)),
-                progress_prefix=f"{ip} ",
             )
+
+        interleaved_results = interleaved_speed_tests(
+            candidate_names,
+            run_formal_speed_round,
+            speed_repeats,
+            float(settings.get("speed_repeat_interval_seconds", 0.5)),
+            require_all_speed_repeats,
+            rng,
+        )
+
+        for node_name in candidate_names:
+            ip = ip_from_node_name(node_name)
+            if not ip:
+                continue
+            result = interleaved_results[node_name]
             timeout_counts["formal_speed"] += int(
                 result.get("timeout_runs", 0)
             )
@@ -3657,6 +3945,7 @@ def main() -> int:
             current_ip,
             int(settings["active_pool_size"]),
             failed_ips,
+            bool(settings.get("allow_delay_only_pool_backfill", False)),
         )
         if not active_ips:
             raise RuntimeError("未生成正式优选池")
@@ -3791,6 +4080,13 @@ def main() -> int:
         decision["node_port"] = candidate_port
         save_json_atomic(STATE_PATH, state)
         save_json_atomic(DECISION_JSON, decision)
+        try_write_run_status(
+            args.quick,
+            "success",
+            run_started_at,
+            reason=str(decision.get("reason", "")),
+            summary=summary,
+        )
 
         if ranked:
             log("本轮实际下载测速排名：")
@@ -3891,6 +4187,10 @@ def main() -> int:
             f"{partial_funnel}"
         )
         log(f"运行失败：{failure}")
+        if not args.diagnose:
+            try_write_run_status(
+                args.quick, "failed", run_started_at, reason=failure
+            )
         if failed_stage_durations:
             log(
                 "失败前阶段耗时："

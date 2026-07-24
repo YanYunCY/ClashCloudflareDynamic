@@ -25,7 +25,7 @@ tools/privacy_check.py         发布前隐私检查
 
 `v1.3.0` 已把 Windows 安装器迁移为 WPF 单页界面：主配置位于左侧，脱敏实时摘要位于右侧，本地 Mihomo 连接设置默认折叠。界面支持“跟随系统 / 浅色 / 深色”，使用系统强调色、轻量设置卡片和响应式布局；窄窗口会收起摘要，表单可独立滚动且底部操作栏保持固定。安装器也针对 Per-Monitor V2 DPI、ClearType 和布局像素对齐做了专门处理。
 
-`v1.3.1` 为通知与日志维护补丁：通知 HTML 默认最多保留最新 100 份且不超过 30 天，通知投递日志和健康监控启动器错误日志也会按大小轮转，避免半小时任务长期运行后持续堆积。
+`v1.3.2` 补齐正式测速公平调度、历史稳定性评分、严格正式池准入和按模式运行心跳；`v1.3.1` 的通知 HTML 数量上限与日志轮转仍然保留。
 
 ## 版本与下载
 
@@ -33,7 +33,8 @@ tools/privacy_check.py         发布前隐私检查
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
-| `v1.3.1` | 最新稳定版 | 通知报告数量上限、通知与健康监控日志轮转 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.1) |
+| `v1.3.2` | 最新稳定版 | 交错三轮测速、历史稳定性、正式池准入、扫描心跳 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.2) |
+| `v1.3.1` | 维护版本 | 通知报告数量上限、通知与健康监控日志轮转 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.1) |
 | `v1.3.0` | 历史稳定版 | WPF 单页安装器、三种外观、实时脱敏摘要与响应式布局 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.0) |
 | `v1.2.0` | 历史稳定版 | 三步现代安装向导、脱敏确认页、小屏与无障碍改进 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.2.0) |
 | `v1.1.0` | 历史稳定版 | Release 图形安装向导、升级保留与事务重配置 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.1.0) |
@@ -83,7 +84,7 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 
 普通用户推荐使用图形向导：
 
-1. 从 [v1.3.1 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.1) 下载 `ClashCloudflareDynamic.zip`；
+1. 从 [v1.3.2 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.2) 下载 `ClashCloudflareDynamic.zip`；
 2. 完整解压 ZIP，不要直接在压缩包预览窗口中运行；
 3. 双击根目录的 `Install.cmd`；
 4. 选择 VMess、VLESS、Trojan 或自定义 Mihomo 模板，填写端口、API 和节点参数；
@@ -199,11 +200,13 @@ git status --ignored --short
 1. 候选必须通过节点模板所选端口的 TCP 初筛；
 2. provider 热更新后通过真实代理链路做 3 轮延迟测试；
 3. 低延迟、历史高速和随机探索候选进入速度粗测；
-4. 正式候选连续下载测速 3 次；
+4. 正式候选按轮交错下载测速 3 次，避免某个节点连续占用同一时间窗口；
 5. 任意一次失败、下载量不足或速度 CV 超过阈值时淘汰；
 6. 达到本轮最高平均速度 `fast_speed_ratio` 的节点进入高速组；
 7. 高速组内按三轮平均延迟选择节点；
-8. 正常切换受冷却时间控制，失效节点可以立即替换。
+8. 历史速度按每个 IP 最近 `historical_speed_samples_per_ip` 次结果加权，并使用 `historical_speed_stability_penalty` 惩罚波动；
+9. 正式池默认只新增通过正式下载测速的节点，旧正式池有效节点继续保留；只有显式设置 `allow_delay_only_pool_backfill: true` 才允许仅通过延迟测试的新节点补池；
+10. 正常切换受冷却时间控制，失效节点可以立即替换。
 
 ## 通知与 HTML 报告中的阶段漏斗
 
@@ -223,7 +226,7 @@ Windows 通知和点击后打开的 HTML 报告按“候选 → TCP 可达 → �
 - `Clash Cloudflare Deep Scan 5000 6h`
 - `Clash Cloudflare Health Monitor 30min`
 
-扫描和健康监控均使用 `pythonw.exe`。健康监控启动器通过 `CREATE_NO_WINDOW` 调用 PowerShell，因此不会弹出空命令行窗口。
+扫描和健康监控均使用 `pythonw.exe`。健康监控启动器通过 `CREATE_NO_WINDOW` 调用 PowerShell，因此不会弹出空命令行窗口。轻量和深度扫描分别写入 `logs/last_run_light.json` 与 `logs/last_run_deep.json`，区分 `success`、`skipped`、`failed`；健康监控只把有效成功心跳记为最近成功，并检查正式测速通过数和正式池大小。
 
 ## 通知报告与日志维护
 

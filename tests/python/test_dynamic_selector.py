@@ -38,6 +38,41 @@ class StageTimerTests(unittest.TestCase):
         self.assertEqual(durations["tcp_probe"], 3.3)
 
 
+class RunStatusTests(unittest.TestCase):
+    def test_success_heartbeat_is_per_mode_atomic_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            light = root / "last_run_light.json"
+            deep = root / "last_run_deep.json"
+            with mock.patch.object(selector, "LIGHT_RUN_STATUS_PATH", light):
+                with mock.patch.object(selector, "DEEP_RUN_STATUS_PATH", deep):
+                    saved_path = selector.write_run_status(
+                        True,
+                        "success",
+                        "2026-07-24T08:00:00+08:00",
+                        reason="保持当前节点",
+                        summary={
+                            "speed_passed_count": 2,
+                            "active_pool_size": 12,
+                        },
+                    )
+
+            self.assertEqual(saved_path, light)
+            self.assertFalse(deep.exists())
+            raw = light.read_bytes()
+            self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
+            payload = json.loads(raw.decode("utf-8"))
+            self.assertEqual(payload["mode"], "light")
+            self.assertEqual(payload["status"], "success")
+            self.assertEqual(payload["scan_summary"]["speed_passed_count"], 2)
+
+    def test_unknown_heartbeat_status_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "未知运行状态"):
+            selector.write_run_status(
+                False, "partial", "2026-07-24T08:00:00+08:00"
+            )
+
+
 class HealthMonitorLauncherTests(unittest.TestCase):
     @mock.patch.object(health_launcher.subprocess, "run")
     def test_launcher_uses_no_console_and_propagates_exit_code(self, run):
@@ -588,6 +623,78 @@ class AveragingTests(unittest.TestCase):
         self.assertEqual(result["speed_samples_Mbps"], "FAIL,8.00,8.00")
 
 
+    @mock.patch.object(selector.time, "sleep")
+    @mock.patch.object(selector, "log")
+    def test_interleaved_speed_tests_cover_every_candidate_each_round(
+        self, _log, sleep
+    ):
+        names = ["node-a", "node-b", "node-c"]
+        calls = []
+        speeds = {"node-a": 8.0, "node-b": 10.0, "node-c": 12.0}
+
+        def run_one(node_name, round_index):
+            calls.append((round_index, node_name))
+            speed = speeds[node_name] + round_index - 2
+            return {
+                "ok": True,
+                "speed_Mbps": speed,
+                "speed_MB_per_s": speed / 8,
+                "ttfb_ms": 100.0 + round_index,
+                "total_ms": 1000.0,
+            }
+
+        results = selector.interleaved_speed_tests(
+            names, run_one, 3, 0.5, True, random.Random(17)
+        )
+
+        self.assertEqual(len(calls), 9)
+        for round_index in range(1, 4):
+            self.assertEqual(
+                {name for round_no, name in calls if round_no == round_index},
+                set(names),
+            )
+        self.assertEqual(results["node-a"]["speed_Mbps"], 8.0)
+        self.assertEqual(
+            results["node-b"]["speed_samples_Mbps"], "9.00,10.00,11.00"
+        )
+        self.assertEqual(results["node-c"]["attempted_runs"], 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    @mock.patch.object(selector.time, "sleep")
+    @mock.patch.object(selector, "log")
+    def test_interleaved_strict_failure_only_skips_failed_candidate(
+        self, _log, _sleep
+    ):
+        calls = []
+
+        def run_one(node_name, round_index):
+            calls.append((round_index, node_name))
+            if node_name == "bad":
+                return {
+                    "ok": False,
+                    "timed_out": True,
+                    "error": "下载超时",
+                }
+            return {
+                "ok": True,
+                "speed_Mbps": 9.0,
+                "speed_MB_per_s": 1.125,
+                "ttfb_ms": 90.0,
+                "total_ms": 900.0,
+            }
+
+        results = selector.interleaved_speed_tests(
+            ["bad", "good"], run_one, 3, 0, True, random.Random(3)
+        )
+
+        self.assertEqual(sum(name == "bad" for _, name in calls), 1)
+        self.assertEqual(sum(name == "good" for _, name in calls), 3)
+        self.assertEqual(results["bad"]["speed_samples_Mbps"], "FAIL,SKIP,SKIP")
+        self.assertEqual(results["bad"]["timeout_runs"], 1)
+        self.assertTrue(results["good"]["ok"])
+        self.assertEqual(results["good"]["attempted_runs"], 3)
+
+
 class SpeedJsonTests(unittest.TestCase):
     @mock.patch.object(selector.subprocess, "run")
     def test_speed_json_uses_unambiguous_byte_rate_key(self, run):
@@ -1005,6 +1112,30 @@ class ProbeSelectionTests(unittest.TestCase):
         self.assertEqual(counts["current_extra"], 1)
 
 
+class HistoricalReputationTests(unittest.TestCase):
+    def test_stable_history_beats_one_recent_spike(self):
+        fields = ["time", "ip", "delay_ms", "speed_Mbps", "score"]
+        rows = [
+            {"time": "2026-07-24T07:00:00+08:00", "ip": "1.1.1.1", "speed_Mbps": 10},
+            {"time": "2026-07-24T07:01:00+08:00", "ip": "2.2.2.2", "speed_Mbps": 55},
+            {"time": "2026-07-24T07:30:00+08:00", "ip": "1.1.1.1", "speed_Mbps": 10},
+            {"time": "2026-07-24T07:31:00+08:00", "ip": "2.2.2.2", "speed_Mbps": 55},
+            {"time": "2026-07-24T08:00:00+08:00", "ip": "1.1.1.1", "speed_Mbps": 100},
+            {"time": "2026-07-24T08:01:00+08:00", "ip": "2.2.2.2", "speed_Mbps": 55},
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            history_path = Path(temp_dir) / "history.csv"
+            with history_path.open("w", encoding="utf-8-sig", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(rows)
+            with mock.patch.object(selector, "HISTORY_PATH", history_path):
+                scores = selector.load_historical_speed_scores(5, 0.25)
+
+        self.assertGreater(scores["2.2.2.2"], scores["1.1.1.1"])
+        self.assertEqual(scores["2.2.2.2"], 55.0)
+
+
 class ActivePoolTests(unittest.TestCase):
     def test_excluded_ips_are_not_restored_from_any_pool_source(self):
         active = selector.build_active_pool(
@@ -1022,7 +1153,26 @@ class ActivePoolTests(unittest.TestCase):
             excluded_ips={"3.3.3.3", "6.6.6.6"},
         )
 
-        self.assertEqual(active, ["4.4.4.4", "5.5.5.5"])
+        self.assertEqual(active, ["4.4.4.4"])
+
+    def test_delay_only_new_nodes_require_explicit_backfill_opt_in(self):
+        common = {
+            "ranked": [{"ip": "2.2.2.2"}],
+            "delays": {"CF-D | 3.3.3.3": 20.0},
+            "previous_active": ["1.1.1.1"],
+            "current_ip": "1.1.1.1",
+            "pool_size": 10,
+        }
+
+        strict_pool = selector.build_active_pool(**common)
+        compatibility_pool = selector.build_active_pool(
+            **common, allow_delay_only_backfill=True
+        )
+
+        self.assertEqual(strict_pool, ["1.1.1.1", "2.2.2.2"])
+        self.assertEqual(
+            compatibility_pool, ["1.1.1.1", "2.2.2.2", "3.3.3.3"]
+        )
 
     def test_current_ip_is_kept_when_fixed_nodes_exceed_discovery_limit(self):
         rows = [

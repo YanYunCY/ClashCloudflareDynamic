@@ -667,6 +667,54 @@ try {
     Assert-Equal 0 $HealthyAssessment.Issues.Count "首次深扫宽限期内产生误报"
     Assert-Equal $Now.AddMinutes(-30).ToString("o") $HealthyAssessment.State.last_success.light "轻量扫描成功时间未记录"
 
+    $HeartbeatLogDir = Join-Path $InstallDir "logs"
+    New-Item -ItemType Directory -Path $HeartbeatLogDir -Force | Out-Null
+    $HeartbeatPath = Join-Path $HeartbeatLogDir "last_run_light.json"
+    $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $SkippedState = New-HealthState $Now.AddHours(-2)
+    $SkippedState.last_success.light = $Now.AddMinutes(-60).ToString("o")
+    $SkippedHeartbeat = [PSCustomObject]@{
+        schema_version = 1
+        mode = "light"
+        status = "skipped"
+        started_at = $Now.AddMinutes(-5).ToString("o")
+        completed_at = $Now.AddMinutes(-4).ToString("o")
+        reason = "已有扫描正在运行"
+    } | ConvertTo-Json -Depth 10
+    [IO.File]::WriteAllText($HeartbeatPath, $SkippedHeartbeat, $Utf8NoBom)
+    $SkippedAssessment = Get-HealthAssessment @($HealthySnapshots[0]) $SkippedState $Now $InstallDir
+    Assert-Equal $Now.AddMinutes(-60).ToString("o") $SkippedAssessment.State.last_success.light "跳过扫描错误刷新了成功时间"
+
+    $SuccessHeartbeat = [PSCustomObject]@{
+        schema_version = 1
+        mode = "light"
+        status = "success"
+        started_at = $Now.AddMinutes(-12).ToString("o")
+        completed_at = $Now.AddMinutes(-10).ToString("o")
+        reason = "保持当前节点"
+        scan_summary = [PSCustomObject]@{
+            speed_passed_count = 2
+            active_pool_size = 12
+        }
+    } | ConvertTo-Json -Depth 10
+    [IO.File]::WriteAllText($HeartbeatPath, $SuccessHeartbeat, $Utf8NoBom)
+    $SuccessAssessment = Get-HealthAssessment @($HealthySnapshots[0]) $SkippedAssessment.State $Now $InstallDir
+    Assert-Equal $Now.AddMinutes(-10).ToString("o") $SuccessAssessment.State.last_success.light "成功心跳未刷新成功时间"
+    Assert-Equal 0 $SuccessAssessment.Issues.Count "有效成功心跳产生误报"
+
+    $LowQualityHeartbeat = $SuccessHeartbeat | ConvertFrom-Json
+    $LowQualityHeartbeat.scan_summary.speed_passed_count = 0
+    [IO.File]::WriteAllText(
+        $HeartbeatPath,
+        ($LowQualityHeartbeat | ConvertTo-Json -Depth 10),
+        $Utf8NoBom
+    )
+    $LowQualityAssessment = Get-HealthAssessment @($HealthySnapshots[0]) $SuccessAssessment.State $Now $InstallDir
+    if ($LowQualityAssessment.Issues.Key -notcontains "scan.light.quality") {
+        throw "低质量成功心跳未触发质量告警"
+    }
+    Remove-Item -LiteralPath $HeartbeatPath -Force
+
     $global:ClashCloudflareDynamicTestRegisteredTasks = @()
     $global:ClashCloudflareDynamicTestUnregisteredTasks = @()
     $HybridConfiguration = Get-HealthTaskConfiguration

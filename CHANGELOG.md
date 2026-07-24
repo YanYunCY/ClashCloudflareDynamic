@@ -2,6 +2,15 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.3.2](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.2) — 2026-07-24
+
+- 正式下载测速改为跨候选按轮交错执行三次，降低不同时段网络波动对节点比较的偏差；
+- 严格模式下某节点失败后只跳过该节点后续轮次，不影响其他候选完成三轮测试；
+- 历史速度候选使用每个 IP 最近 5 次结果的加权评分，并按速度变异系数惩罚不稳定记录；
+- 正式池默认只新增通过正式下载测速的节点，延迟通过但未完成下载测速的新节点不再自动补池；
+- 轻量和深度扫描分别记录 `success`、`skipped`、`failed` 心跳，健康监控校验最近成功结果的正式测速通过数与正式池大小；
+- 保留 v1.3.1 的通知报告数量上限、通知日志和健康监控日志轮转。
+
 ## [v1.3.1](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.1) — 2026-07-24
 
 - 通知 HTML 在保留天数之外新增最大文件数限制，默认只保留最新 100 份，避免半小时任务长期产生上千个报告；
