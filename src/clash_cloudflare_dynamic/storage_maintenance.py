@@ -12,27 +12,34 @@ from typing import Callable
 
 
 MANAGED_BACKUP_PREFIXES = (
-    "install",
-    "database-corrupt",
-    "notification-details",
-    "final-provider-rollback",
-    "test-sync",
-    "final-code-review",
-    "final-review",
-    "review-fixes",
-    "stability-update",
-    "priority-fix",
-    "background-notify",
-    "feature-update",
-    "runtime-update",
-    "review-five-improvements",
     "aggressive-mode",
+    "background-notify",
+    "database-corrupt",
+    "feature-update",
+    "final-code-review",
+    "final-provider-rollback",
+    "final-review",
+    "health-launcher-python",
+    "health-launcher-pythonw",
+    "install",
+    "notification-details",
+    "notification-window-fix",
+    "performance-final",
+    "performance-final-observability",
+    "performance-improvements",
+    "priority-fix",
+    "review-five-improvements",
+    "review-fixes",
+    "runtime-update",
+    "stability-update",
+    "test-sync",
 )
 MANAGED_BACKUP_NAME = re.compile(
     r"^(?:"
     + "|".join(re.escape(prefix) for prefix in MANAGED_BACKUP_PREFIXES)
     + r")-\d{8}-\d{6}(?:-\d+)*$"
 )
+ROOT_BACKUP_FILE_NAME = re.compile(r"^(.+)\.backup-(\d{8}-\d{6})(?:-\d+)*$")
 CORRUPTION_MESSAGES = (
     "database disk image is malformed",
     "file is not a database",
@@ -122,6 +129,92 @@ def cleanup_managed_backups(
         except (OSError, RuntimeError) as exc:
             if logger:
                 logger(f"Cannot remove backup {child}: {exc}")
+    return deleted
+
+
+def cleanup_root_backup_files(
+    install_root: Path,
+    keep_per_file: int = 3,
+    retention_days: float = 30,
+    logger: Callable[[str], None] | None = None,
+    now: float | None = None,
+) -> int:
+    """清理安装根目录中散落的 *.backup-YYYYMMDD-HHMMSS 文件。
+
+    遍历 *install_root* 下的直接子文件，匹配 ``ROOT_BACKUP_FILE_NAME``
+    正则，按 base name 分组后，每组保留最新 *keep_per_file* 份，并删除
+    mtime 超过 *retention_days* 天的旧文件。
+
+    Remove stale ``*.backup-YYYYMMDD-HHMMSS`` files that accumulate in the
+    installation root directory.  Files are grouped by their base name (the
+    part before the ``.backup-`` suffix).  Within each group the newest
+    *keep_per_file* copies are always retained; any copy whose mtime exceeds
+    *retention_days* days is removed.
+
+    Parameters
+    ----------
+    install_root:
+        Root directory to scan (one level only, files only).
+    keep_per_file:
+        Minimum number of backups to retain per base name regardless of age.
+    retention_days:
+        Age threshold in days.  Files older than this are eligible for removal.
+    logger:
+        Optional callback for diagnostic messages.
+    now:
+        Override for the current time (seconds since epoch).  Defaults to
+        ``time.time()``.
+
+    Returns
+    -------
+    int
+        Number of files deleted.
+    """
+    if not install_root.is_dir():
+        return 0
+
+    cutoff = (time.time() if now is None else float(now)) - max(
+        1.0, float(retention_days)
+    ) * 86400
+    keep = max(0, int(keep_per_file))
+
+    try:
+        children = list(install_root.iterdir())
+    except OSError as exc:
+        if logger:
+            logger(f"Cannot inspect install root {install_root}: {exc}")
+        return 0
+
+    # Group matching files by their base name (first capture group).
+    groups: dict[str, list[tuple[float, Path]]] = {}
+    for child in children:
+        if not child.is_file() or _is_reparse_point(child):
+            continue
+        match = ROOT_BACKUP_FILE_NAME.fullmatch(child.name)
+        if not match:
+            continue
+        base_name = match.group(1)
+        try:
+            mtime = child.stat().st_mtime
+        except OSError as exc:
+            if logger:
+                logger(f"Cannot inspect backup file {child}: {exc}")
+            continue
+        groups.setdefault(base_name, []).append((mtime, child))
+
+    deleted = 0
+    for base_name, entries in groups.items():
+        # Sort newest-first so slicing beyond *keep* gives the oldest copies.
+        entries.sort(key=lambda item: (item[0], item[1].name), reverse=True)
+        for modified, child in entries[keep:]:
+            if modified >= cutoff:
+                continue
+            try:
+                child.unlink()
+                deleted += 1
+            except OSError as exc:
+                if logger:
+                    logger(f"Cannot remove backup file {child}: {exc}")
     return deleted
 
 

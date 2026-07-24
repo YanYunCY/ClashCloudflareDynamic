@@ -215,6 +215,9 @@ def write_archive(package_root: Path, archive_path: Path) -> None:
                     )
                     info.compress_type = zipfile.ZIP_STORED
                     info.external_attr = 0o100644 << 16
+                    # Pin to FAT/DOS (0) so the ZIP is byte-identical
+                    # whether built on Windows, Linux, or macOS.
+                    info.create_system = 0
                     archive.writestr(info, source.read_bytes())
         os.replace(temporary_archive, archive_path)
     finally:

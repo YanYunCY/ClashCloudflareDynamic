@@ -76,6 +76,26 @@ class ReleaseBuildTests(unittest.TestCase):
                     build_release.is_forbidden_release_path(relative)
                 )
 
+    def test_zip_create_system_is_pinned_to_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dist_root = Path(temp_dir)
+            _, archive_path = build_release.build_release(
+                REPOSITORY_ROOT,
+                dist_root,
+            )
+            self.assertIsNotNone(archive_path)
+            assert archive_path is not None
+
+            with zipfile.ZipFile(archive_path) as archive:
+                for info in archive.infolist():
+                    with self.subTest(file=info.filename):
+                        self.assertEqual(
+                            info.create_system,
+                            0,
+                            f"ZipInfo.create_system should be 0 (FAT/DOS) for "
+                            f"deterministic builds, got {info.create_system}",
+                        )
+
 
 if __name__ == "__main__":
     unittest.main()

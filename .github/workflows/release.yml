@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+
+      - name: Run privacy check
+        shell: pwsh
+        run: python tools/privacy_check.py
+
+      - name: Build release package
+        shell: pwsh
+        run: python tools/build_release.py
+
+      - name: Compute SHA-256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist\ClashCloudflareDynamic.zip -Algorithm SHA256).Hash
+          Set-Content -Path dist\ClashCloudflareDynamic.zip.sha256 -Value $hash -Encoding UTF8NoBOM
+
+      - name: Extract release notes from CHANGELOG
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python -c "import re,os,pathlib; tag=os.environ['TAG']; text=pathlib.Path('CHANGELOG.md').read_text(encoding='utf-8'); m=re.search(r'(?m)^## \['+re.escape(tag)+r'\][^\n]*\n(.*?)(?=^## |\Z)',text,re.DOTALL); pathlib.Path('dist/release_notes.tmp').write_text(m.group(1).strip() if m else 'Release '+tag,encoding='utf-8')"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ClashCloudflareDynamic-release-${{ github.ref_name }}
+          path: |
+            dist/ClashCloudflareDynamic.zip
+            dist/ClashCloudflareDynamic.zip.sha256
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create ${{ github.ref_name }} `
+            dist/ClashCloudflareDynamic.zip `
+            dist/ClashCloudflareDynamic.zip.sha256 `
+            --title "ClashCloudflareDynamic ${{ github.ref_name }}" `
+            --notes-file dist/release_notes.tmp

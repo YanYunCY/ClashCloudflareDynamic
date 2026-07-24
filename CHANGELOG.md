@@ -2,6 +2,16 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.3.3](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.3) — 2026-07-24
+
+- 速度粗测阶段对单节点选择确认超时增加容错，失败节点跳过继续测试而不再中止整轮扫描；
+- Mihomo 控制面 API 请求显式禁用系统和环境代理，避免在用户设置全局代理时产生自我干扰；
+- 构建发布包时固定 ZipInfo.create_system 为 0，确保 Windows/Linux/macOS 构建字节级一致；
+- backups/ 清理白名单补充 6 个缺失前缀，根目录散落备份文件新增保留策略（每类保留最新 3 份且不超 30 天）；
+- 新增 `.github/workflows/release.yml` 自动发布流程，tag push 自动触发测试、构建、生成 SHA-256 校验文件并创建 GitHub Release；
+- CI workflow 中 Actions 引用固定到具体 commit SHA 以防供应链风险；
+- CHANGELOG 为 v1.1.0 至 v1.3.2 补充 SHA-256 哈希值记录。
+
 ## [v1.3.2](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.2) — 2026-07-24
 
 - 正式下载测速改为跨候选按轮交错执行三次，降低不同时段网络波动对节点比较的偏差；
@@ -11,35 +21,59 @@
 - 轻量和深度扫描分别记录 `success`、`skipped`、`failed` 心跳，健康监控校验最近成功结果的正式测速通过数与正式池大小；
 - 保留 v1.3.1 的通知报告数量上限、通知日志和健康监控日志轮转。
 
+Windows 部署包 SHA-256：
+
+```text
+28D9B18F0C76477E08702A90E2CD80CCE3F9D7B5777CD327B7E352339AF83A32
+```
+
 ## [v1.3.1](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.1) — 2026-07-24
 
 - 通知 HTML 在保留天数之外新增最大文件数限制，默认只保留最新 100 份，避免半小时任务长期产生上千个报告；
 - `notification_delivery.log` 和健康监控启动器错误日志新增按大小轮转，默认每份 1 MB、保留 2 份备份；
 - 通知脚本会一并清理超过一天的残留 HTML 临时文件，扫描、健康监控与通知脚本共用相同的保留上限。
 
+Windows 部署包 SHA-256：
+
+```text
+C7D2F62B290E20E96A44DD781CDB5D08EF1D9CCB38E834543E303743C2A9C1CA
+```
+
 ## [v1.3.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.0) — 2026-07-24
 
-- Windows 图形安装器从 WinForms 迁移到 WPF，改为接近 Windows 11“设置”的单页配置界面；
-- 新增“跟随系统 / 浅色 / 深色”外观面板；跟随系统时读取 Windows 应用主题，浅色和深色模式均复用系统强调色；
+- Windows 图形安装器从 WinForms 迁移到 WPF，改为接近 Windows 11”设置”的单页配置界面；
+- 新增”跟随系统 / 浅色 / 深色”外观面板；跟随系统时读取 Windows 应用主题，浅色和深色模式均复用系统强调色；
 - 增加轻量设置卡片、42 DIP 输入控件和更自然的纵向留白，改善旧版界面过于扁平的问题；
 - 外观标题与分段选择器分离，三种主题的选中态统一使用系统强调色；协议名称统一为 VMess，Mihomo 展开按钮改为右侧标准 chevron；
 - 左侧集中显示协议、端口、节点认证、SNI、Host 和 WebSocket 路径，Mihomo API、密钥与 Mixed Proxy 默认折叠；
-- 右侧使用较弱层级实时显示协议、端口、SNI、Host、路径和校验状态，UUID、密码和 API 密钥只显示“已设置”或“未设置”；
+- 右侧使用较弱层级实时显示协议、端口、SNI、Host、路径和校验状态，UUID、密码和 API 密钥只显示”已设置”或”未设置”；
 - 窄于 1040 DIP 时自动收起摘要并把空间还给表单；表单独立滚动，底部操作栏始终固定；
-- 底部固定“取消”和“验证并安装”，配置不完整时标出并聚焦对应字段；
+- 底部固定”取消”和”验证并安装”，配置不完整时标出并聚焦对应字段；
 - 启用 Per-Monitor V2 DPI、ClearType、布局像素对齐和 Segoe UI Variable 字体回退，并复核 100%、125%、150% 和 175% 缩放；
 - 深色滚动条使用透明轨道和细深灰滑块，悬停加宽、拖动时使用系统强调色；所有 WPF 窗口共用同一主题模板；
 - 已有安装选择、完成/错误提示和文件选择也迁移到 WPF；非交互安装、备份、凭据处理、计划任务和扫描核心逻辑保持不变。
 
+Windows 部署包 SHA-256：
+
+```text
+F2D9C2ABD4A44BBDBCE8315EA0A04C76A41C27E004D0B8432FEF4AC40DB1DD0E
+```
+
 ## [v1.2.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.2.0) — 2026-07-23
 
-- 图形安装器改为“连接与协议 → 节点参数 → 确认安装”三步向导；
+- 图形安装器改为”连接与协议 → 节点参数 → 确认安装”三步向导；
 - 新增深色步骤导航、分组卡片、就地错误提示和统一的安装结果窗口；
 - 确认页显示协议、端口、SNI、Host、WS 路径或模板文件名，UUID、密码和 API 密钥始终脱敏；
 - 摘要会隐藏 URL 中意外包含的用户信息，错误详情和安装结果支持复制；
 - 改进键盘焦点、可访问名称、Esc/Enter 操作以及高 DPI 和小屏幕滚动；
 - 公开 SNI/Host 占位符统一为保留域名 `.example`，安装器拒绝将占位域名写入真实配置；
 - 节点生成、凭据处理、事务安装、计划任务和扫描核心逻辑保持不变。
+
+Windows 部署包 SHA-256：
+
+```text
+3051903F7F1ACDB1AFFEC942FC3CB0C03A01A5861469D8EAA069D09C3C1BCFF0
+```
 
 ## [v1.1.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.1.0) — 2026-07-23
 
@@ -51,6 +85,12 @@
 - 私有配置只进入受控临时目录和本机安装目录，安装结束后清理临时副本；
 - 安装前停止正在运行的受管任务，降低升级与扫描并发写入风险；
 - 隐私检查新增 Git 已跟踪敏感目录与文件的阻断规则。
+
+Windows 部署包 SHA-256：
+
+```text
+6078EB77217123DD7D46DE3014C4F7680B7C669EAD5EFB036687AC01264E4BE4
+```
 
 ## [v1.0.2](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.0.2) — 2026-07-23
 

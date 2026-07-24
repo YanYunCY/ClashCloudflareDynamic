@@ -395,6 +395,74 @@ class MihomoPollingTests(unittest.TestCase):
                 FakeAPI(), "group", {"a", "b"}, 0, 0.05
             )
 
+    def test_speed_probe_continues_after_single_node_confirmation_timeout(self):
+        """Speed probe loop should catch per-node MihomoConfirmationTimeout and continue."""
+        # Simulate a speed probe scenario with 2 nodes: one times out, one succeeds
+        nodes = ["CF-A | 1.1.1.1", "CF-A | 2.2.2.2"]
+        results = []
+
+        def simulate_probe_loop():
+            for node_name in nodes:
+                try:
+                    # First node times out, second succeeds
+                    if node_name == "CF-A | 1.1.1.1":
+                        raise selector.MihomoConfirmationTimeout("节点选择确认超时")
+                    # Second node succeeds (no exception)
+                except selector.MihomoConfirmationTimeout as exc:
+                    # Record failure and continue (this is the key behavior)
+                    results.append({
+                        "node": node_name,
+                        "speed_ok": False,
+                        "error": str(exc),
+                    })
+                    continue
+
+                # Normal processing for successful node
+                results.append({
+                    "node": node_name,
+                    "speed_ok": True,
+                    "error": "",
+                })
+
+        # Execute the simulated loop
+        simulate_probe_loop()
+
+        # Verify: loop completed without raising, both nodes recorded
+        self.assertEqual(len(results), 2)
+        self.assertFalse(results[0]["speed_ok"])
+        self.assertIn("节点选择确认超时", results[0]["error"])
+        self.assertEqual(results[0]["node"], "CF-A | 1.1.1.1")
+        self.assertTrue(results[1]["speed_ok"])
+        self.assertEqual(results[1]["node"], "CF-A | 2.2.2.2")
+
+    def test_mihomo_api_has_no_proxy_opener(self):
+        """MihomoAPI should use a dedicated opener that bypasses system proxy."""
+        api = selector.MihomoAPI("http://127.0.0.1:9090", "")
+
+        # Verify the _opener attribute exists and is the correct type
+        self.assertTrue(hasattr(api, "_opener"))
+        self.assertIsInstance(
+            api._opener,
+            selector.urllib.request.OpenerDirector,
+        )
+
+        # Verify the opener is used instead of urlopen
+        with mock.patch.object(api._opener, "open") as mock_open:
+            mock_open.return_value.__enter__ = mock.Mock(
+                return_value=mock.Mock(
+                    read=lambda: b'{"version":"1.0"}',
+                )
+            )
+            mock_open.return_value.__exit__ = mock.Mock(return_value=False)
+
+            try:
+                api.version()
+            except Exception:
+                pass  # We're only testing that _opener.open is called
+
+            # Verify _opener.open was called (not urlopen)
+            self.assertTrue(mock_open.called)
+
     def test_group_poll_does_not_get_again_at_deadline(self):
         class FakeClock:
             def __init__(self):

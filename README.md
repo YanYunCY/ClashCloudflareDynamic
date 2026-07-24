@@ -33,8 +33,9 @@ tools/privacy_check.py         发布前隐私检查
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
-| `v1.3.2` | 最新稳定版 | 交错三轮测速、历史稳定性、正式池准入、扫描心跳 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.2) |
-| `v1.3.1` | 维护版本 | 通知报告数量上限、通知与健康监控日志轮转 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.1) |
+| `v1.3.3` | 最新稳定版 | 粗测容错、API无代理、构建复现、备份清理、自动发布 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.3) |
+| `v1.3.2` | 历史稳定版 | 交错三轮测速、历史稳定性、正式池准入、扫描心跳 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.2) |
+| `v1.3.1` | 历史稳定版 | 通知报告数量上限、通知与健康监控日志轮转 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.1) |
 | `v1.3.0` | 历史稳定版 | WPF 单页安装器、三种外观、实时脱敏摘要与响应式布局 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.0) |
 | `v1.2.0` | 历史稳定版 | 三步现代安装向导、脱敏确认页、小屏与无障碍改进 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.2.0) |
 | `v1.1.0` | 历史稳定版 | Release 图形安装向导、升级保留与事务重配置 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.1.0) |

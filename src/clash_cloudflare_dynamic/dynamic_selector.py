@@ -47,11 +47,13 @@ from typing import Any
 try:
     from .storage_maintenance import (
         cleanup_managed_backups,
+        cleanup_root_backup_files,
         connect_sqlite_with_recovery,
     )
 except ImportError:  # Flat deployment bundle installed on Windows.
     from storage_maintenance import (
         cleanup_managed_backups,
+        cleanup_root_backup_files,
         connect_sqlite_with_recovery,
     )
 
@@ -1541,6 +1543,13 @@ class MihomoAPI:
         self.base_url = base_url.rstrip("/")
         self.secret = secret
         self.timeout = timeout
+        # Build a dedicated opener that bypasses any system or environment proxy
+        # so control-plane calls to 127.0.0.1 are never routed through the proxy
+        # chain that this tool is actively switching. load_official_ranges()
+        # uses urllib.request.urlopen directly and may still traverse a proxy.
+        self._opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({})
+        )
 
     @staticmethod
     def quote(value: str) -> str:
@@ -1566,7 +1575,7 @@ class MihomoAPI:
             request_timeout = self.timeout if timeout is None else max(
                 0.001, min(self.timeout, float(timeout))
             )
-            with urllib.request.urlopen(req, timeout=request_timeout) as resp:
+            with self._opener.open(req, timeout=request_timeout) as resp:
                 raw = resp.read()
                 if not raw:
                     return None
@@ -3498,6 +3507,15 @@ def main() -> int:
         if deleted_backups:
             log(f"已清理 {deleted_backups} 个过期备份目录")
 
+        deleted_root_backups = cleanup_root_backup_files(
+            ROOT,
+            keep_per_file=settings.get("backup_root_keep_per_file", 3),
+            retention_days=settings.get("backup_retention_days", 30),
+            logger=lambda message: log(f"备份清理：{message}"),
+        )
+        if deleted_root_backups:
+            log(f"已清理 {deleted_root_backups} 个过期根目录备份文件")
+
         if not args.quick:
             enter_stage("清理扫描历史", "maintenance")
             deleted = cleanup_discovery_history(
@@ -3698,14 +3716,39 @@ def main() -> int:
             ip = ip_from_node_name(node_name)
             if not ip:
                 continue
-            select_proxy_and_wait(
-                api,
-                str(settings["discovery_group"]),
-                node_name,
-                settings.get("selector_confirm_timeout_seconds", 3.0),
-                settings.get("mihomo_poll_interval_seconds", 0.05),
-                timeout_observer=lambda: record_timeout("speed_probe"),
-            )
+
+            try:
+                select_proxy_and_wait(
+                    api,
+                    str(settings["discovery_group"]),
+                    node_name,
+                    settings.get("selector_confirm_timeout_seconds", 3.0),
+                    settings.get("mihomo_poll_interval_seconds", 0.05),
+                    timeout_observer=lambda: record_timeout("speed_probe"),
+                )
+            except MihomoConfirmationTimeout as exc:
+                probe_row = {
+                    "time": now_iso(),
+                    "ip": ip,
+                    "protocol": node_protocol,
+                    "port": candidate_port,
+                    "node": node_name,
+                    "delay_ms": delays[node_name],
+                    "speed_ok": False,
+                    "speed_Mbps": 0.0,
+                    "ttfb_ms": None,
+                    "size_download": 0,
+                    "timed_out": False,
+                    "error": f"节点选择确认失败：{exc}",
+                }
+                probe_rows.append(probe_row)
+                failed_ips.add(ip)
+                log(
+                    f"速度粗测 {index}/{len(probe_names)}：{ip} 节点选择失败，"
+                    f"跳过：{exc}"
+                )
+                continue
+
             result = speed_test(
                 curl_bin,
                 str(settings["mixed_proxy"]),
