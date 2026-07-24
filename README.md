@@ -90,7 +90,7 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 
 普通用户推荐使用图形向导：
 
-1. 从 [v1.3.2 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.2) 下载 `ClashCloudflareDynamic.zip`；
+1. 从 [v1.3.4 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.4) 下载 `ClashCloudflareDynamic.zip`；
 2. 完整解压 ZIP，不要直接在压缩包预览窗口中运行；
 3. 双击根目录的 `Install.cmd`；
 4. 选择 VMess、VLESS、Trojan 或自定义 Mihomo 模板，填写端口、API 和节点参数；
