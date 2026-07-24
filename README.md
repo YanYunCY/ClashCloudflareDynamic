@@ -1,5 +1,9 @@
 # Clash Cloudflare Dynamic
 
+[![CI](https://github.com/YanYunCY/ClashCloudflareDynamic/actions/workflows/ci.yml/badge.svg)](https://github.com/YanYunCY/ClashCloudflareDynamic/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/YanYunCY/ClashCloudflareDynamic)](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/latest) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/YanYunCY/ClashCloudflareDynamic/blob/main/LICENSE)
+
+> **TL;DR (English):** A Windows tool that automatically discovers fast Cloudflare Anycast (preferred) IPs and drives Mihomo / Clash Verge Rev to switch to the best node on its own. It validates candidates over your real proxy link with three rounds of latency and download speed tests, runs unattended via a Windows Scheduled Task, and ships with a graphical installer. Documentation below is written in Chinese.
+
 Windows 上的 Cloudflare Anycast 地址动态发现与 Mihomo/Clash Verge Rev 自动优选工具。
 
 它从 Cloudflare 官方 IPv4 网段抽样候选，先按用户选择的节点端口做 TCP 初筛，再通过用户自己的 Mihomo 节点模板验证真实协议、TLS 和传输链路，执行多轮延迟与下载测速，并在防抖条件满足后更新 provider 和切换节点。
@@ -33,7 +37,8 @@ tools/privacy_check.py         发布前隐私检查
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
-| `v1.3.3` | 最新稳定版 | 粗测容错、API无代理、构建复现、备份清理、自动发布 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.3) |
+| `v1.3.4` | 最新稳定版 | 三方同步对账、保留期30天+VACUUM、UTF-8输出、隐私检查反转 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.4) |
+| `v1.3.3` | 历史稳定版 | 粗测容错、API无代理、构建复现、备份清理、自动发布 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.3) |
 | `v1.3.2` | 历史稳定版 | 交错三轮测速、历史稳定性、正式池准入、扫描心跳 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.2) |
 | `v1.3.1` | 历史稳定版 | 通知报告数量上限、通知与健康监控日志轮转 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.1) |
 | `v1.3.0` | 历史稳定版 | WPF 单页安装器、三种外观、实时脱敏摘要与响应式布局 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.0) |

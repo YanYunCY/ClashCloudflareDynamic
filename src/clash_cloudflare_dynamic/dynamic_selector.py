@@ -2117,16 +2117,33 @@ def open_discovery_db() -> sqlite3.Connection:
     )
 
 
-def cleanup_discovery_history(retention_days: float = 90) -> int:
+def cleanup_discovery_history(
+    retention_days: float = 30,
+    vacuum_after_deleted_rows: int = 5000,
+) -> int:
     cutoff = time.time() - max(1.0, float(retention_days)) * 86400
     try:
-        with closing(open_discovery_db()) as connection, connection:
-            cursor = connection.execute(
-                "DELETE FROM ip_history WHERE last_sampled < ?",
-                (cutoff,),
-            )
-            deleted = max(0, int(cursor.rowcount))
-            connection.execute("PRAGMA optimize")
+        vacuum_threshold = max(1, int(vacuum_after_deleted_rows))
+    except (TypeError, ValueError):
+        vacuum_threshold = 5000
+    try:
+        with closing(open_discovery_db()) as connection:
+            with connection:
+                cursor = connection.execute(
+                    "DELETE FROM ip_history WHERE last_sampled < ?",
+                    (cutoff,),
+                )
+                deleted = max(0, int(cursor.rowcount))
+                connection.execute("PRAGMA optimize")
+            if deleted >= vacuum_threshold:
+                # VACUUM cannot run inside a transaction; the `with connection`
+                # block above has already committed, so run it separately on the
+                # same connection to reclaim the freed file space.
+                try:
+                    connection.execute("VACUUM")
+                    log("已执行 VACUUM 回收空间")
+                except sqlite3.OperationalError as exc:
+                    log(f"VACUUM 回收空间失败，本轮跳过：{exc}")
             return deleted
     except sqlite3.Error as exc:
         log(f"清理 IP 扫描历史失败：{exc}")
@@ -3392,6 +3409,12 @@ def diagnose(api: MihomoAPI, settings: dict[str, Any]) -> int:
 
 def main() -> int:
     global NOTIFICATION_REPORT_RETENTION_DAYS
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
     parser = argparse.ArgumentParser(
         description="Cloudflare 新 IP 动态发现与 Clash/Mihomo 自动优选"
     )
@@ -3519,7 +3542,8 @@ def main() -> int:
         if not args.quick:
             enter_stage("清理扫描历史", "maintenance")
             deleted = cleanup_discovery_history(
-                float(settings.get("discovery_history_retention_days", 90))
+                float(settings.get("discovery_history_retention_days", 30)),
+                int(settings.get("vacuum_after_deleted_rows", 5000)),
             )
             if deleted:
                 log(f"已清理 {deleted} 条过期 IP 扫描历史")

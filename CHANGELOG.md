@@ -2,6 +2,15 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.3.4](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.4) — 2026-07-24
+
+- 新增 `tools/sync_check.py` 三方代码同步对账工具与 `config/sync_markers.json` 特征清单，检测开源版、部署版与镜像之间的关键修复漏同步；
+- 扫描历史默认保留期从 90 天降为 30 天，稳态数据库体积显著下降；单次清理删除超过阈值（默认 5000 行，可通过 `vacuum_after_deleted_rows` 调整）后自动执行 VACUUM 回收文件空间；
+- 主程序与对账工具入口强制 stdout/stderr 使用 UTF-8，修复 GBK 控制台下中文输出乱码；
+- 隐私检查从"仅检查已知文本后缀"反转为"默认检查一切、显式跳过已知二进制"，未知二进制文件会被显式标注，消除新增文件类型的检测盲区；
+- README 顶部新增 CI/Release/License 徽章与英文 TL;DR；
+- 新增 issue 模板（bug 报告、功能请求）与 PR 模板，日志粘贴处提醒先脱敏。
+
 ## [v1.3.3](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.3) — 2026-07-24
 
 - 速度粗测阶段对单节点选择确认超时增加容错，失败节点跳过继续测试而不再中止整轮扫描；

@@ -69,7 +69,7 @@ class PrivacyCheckTests(unittest.TestCase):
         self.assertIsNotNone(privacy_check.PERSONAL_ACCOUNT_RE.search(account))
 
     def test_archives_backups_and_runtime_files_are_rejected(self) -> None:
-        self.assertIn(".cmd", privacy_check.TEXT_SUFFIXES)
+        self.assertNotIn(".cmd", privacy_check.BINARY_SUFFIXES)
         for name in (
             "release.zip",
             "settings.json.backup-20260723",
@@ -96,6 +96,47 @@ class PrivacyCheckTests(unittest.TestCase):
         self.assertFalse(
             privacy_check.is_sensitive_tracked_path(Path("examples/settings.example.json"))
         )
+
+    def test_new_text_suffix_is_checked_for_private_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = root / "runtime.toml"
+            leaked_path = "C:" + "\\" + "Users" + "\\" + "sample-user"
+            config.write_text(
+                'data_dir = "' + leaked_path + '"\n',
+                encoding="utf-8",
+            )
+            suspected: set[str] = set()
+            with mock.patch.object(privacy_check, "ROOT", root):
+                text = privacy_check.read_text(config, suspected)
+                self.assertIsNotNone(text)
+                self.assertIsNotNone(privacy_check.USER_PROFILE_RE.search(text))
+            self.assertEqual(suspected, set())
+
+    def test_binary_suffix_is_skipped_without_decoding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            blob = root / "logo.png"
+            blob.write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe\x00secret-bytes")
+            suspected: set[str] = set()
+            with mock.patch.object(privacy_check, "ROOT", root):
+                self.assertIn(".png", privacy_check.BINARY_SUFFIXES)
+                self.assertIsNone(privacy_check.read_text(blob, suspected))
+            # Known binary suffixes are skipped silently, not flagged as suspect.
+            self.assertEqual(suspected, set())
+
+    def test_unknown_undecodable_file_is_reported_as_suspected_binary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            blob = root / "mystery.dat"
+            blob.write_bytes(b"\xff\xfe\x00\x01binary-without-known-suffix")
+            suspected: set[str] = set()
+            with mock.patch.object(privacy_check, "ROOT", root):
+                self.assertNotIn(".dat", privacy_check.BINARY_SUFFIXES)
+                self.assertIsNone(privacy_check.read_text(blob, suspected))
+            self.assertIn("mystery.dat", suspected)
 
     def test_main_fails_when_backup_is_force_tracked(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

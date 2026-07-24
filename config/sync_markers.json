@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "markers": [
+    {
+      "id": "speed-probe-timeout-tolerance",
+      "description": "速度粗测对 MihomoConfirmationTimeout 做单节点容错（不因单点超时整体失败）",
+      "file": "dynamic_selector.py",
+      "pattern": "except MihomoConfirmationTimeout",
+      "min_count": 2,
+      "added_in": "v1.3.3"
+    },
+    {
+      "id": "mihomo-api-no-proxy-opener",
+      "description": "MihomoAPI 使用无代理 opener，避免走系统代理访问本地控制端口",
+      "file": "dynamic_selector.py",
+      "pattern": "ProxyHandler({})",
+      "min_count": 1,
+      "added_in": "v1.3.3"
+    },
+    {
+      "id": "managed-backup-prefix-health-launcher",
+      "description": "MANAGED_BACKUP_PREFIXES 收录 health-launcher-python 前缀（补齐 6 前缀之一）",
+      "file": "storage_maintenance.py",
+      "pattern": "health-launcher-python",
+      "min_count": 1,
+      "added_in": "v1.3.3"
+    },
+    {
+      "id": "cleanup-root-backup-files-def",
+      "description": "storage_maintenance 新增 cleanup_root_backup_files 函数定义",
+      "file": "storage_maintenance.py",
+      "pattern": "def cleanup_root_backup_files",
+      "min_count": 1,
+      "added_in": "v1.3.3"
+    },
+    {
+      "id": "cleanup-root-backup-files-call",
+      "description": "dynamic_selector 调用 cleanup_root_backup_files 清理根目录备份",
+      "file": "dynamic_selector.py",
+      "pattern": "cleanup_root_backup_files(",
+      "min_count": 1,
+      "added_in": "v1.3.3"
+    },
+    {
+      "id": "settings-utf8-sig-read",
+      "description": "读取 settings 时用 utf-8-sig 容错 BOM（历史关键修复）",
+      "file": "dynamic_selector.py",
+      "pattern": "read_text(encoding=\"utf-8-sig\")",
+      "min_count": 1,
+      "added_in": "historical"
+    },
+    {
+      "id": "interleaved-speed-tests",
+      "description": "交错测速：interleaved_speed_tests 降低相邻节点相互干扰（历史关键修复）",
+      "file": "dynamic_selector.py",
+      "pattern": "def interleaved_speed_tests",
+      "min_count": 1,
+      "added_in": "historical"
+    },
+    {
+      "id": "sqlite-recovery-connect",
+      "description": "SQLite 连接经 connect_sqlite_with_recovery 做损坏自愈（历史关键修复）",
+      "file": "storage_maintenance.py",
+      "pattern": "def connect_sqlite_with_recovery",
+      "min_count": 1,
+      "added_in": "historical"
+    },
+    {
+      "id": "opensource-udp-only-protocols",
+      "description": "开源多协议泛化版特有：UDP_ONLY_PROTOCOLS 协议集合（仅适用开源线）",
+      "file": "dynamic_selector.py",
+      "pattern": "UDP_ONLY_PROTOCOLS",
+      "min_count": 2,
+      "lines": ["opensource"],
+      "added_in": "opensource-only"
+    },
+    {
+      "id": "vacuum-after-cleanup",
+      "description": "清理扫描历史大批删除后自动 VACUUM 回收空间",
+      "file": "dynamic_selector.py",
+      "pattern": "vacuum_after_deleted_rows",
+      "min_count": 2,
+      "added_in": "v1.3.4"
+    },
+    {
+      "id": "stdout-utf8-reconfigure",
+      "description": "main 入口强制 stdout/stderr UTF-8，修复 GBK 控制台乱码",
+      "file": "dynamic_selector.py",
+      "pattern": "stream.reconfigure(encoding=\"utf-8\"",
+      "min_count": 1,
+      "added_in": "v1.3.4"
+    }
+  ]
+}

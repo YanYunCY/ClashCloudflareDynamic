@@ -1477,6 +1477,75 @@ class DiscoveryHistoryTests(unittest.TestCase):
                         {"9.9.9.10", "9.9.9.11"},
                     )
 
+    @mock.patch.object(selector, "log")
+    def test_default_retention_is_thirty_days(self, _log):
+        base_time = 1_800_000_000.0
+        day = 86400
+        with tempfile.TemporaryDirectory() as temp_dir:
+            database = Path(temp_dir) / "discovery.sqlite3"
+            with mock.patch.object(selector, "DISCOVERY_DB_PATH", database):
+                with mock.patch.object(
+                    selector.time, "time", return_value=base_time - 31 * day
+                ):
+                    selector.record_tcp_history(
+                        [{"ip": "9.9.9.9", "reachable": False, "tcp_ms": None}]
+                    )
+                with mock.patch.object(
+                    selector.time, "time", return_value=base_time - 29 * day
+                ):
+                    selector.record_tcp_history(
+                        [{"ip": "9.9.9.10", "reachable": True, "tcp_ms": 20}]
+                    )
+
+                with mock.patch.object(
+                    selector.time, "time", return_value=base_time
+                ):
+                    # No retention argument: the default 30-day window must drop
+                    # the 31-day-old sample and keep the 29-day-old one.
+                    self.assertEqual(selector.cleanup_discovery_history(), 1)
+                    self.assertEqual(
+                        selector.load_recently_sampled_ips(90),
+                        {"9.9.9.10"},
+                    )
+
+    @mock.patch.object(selector, "log")
+    def test_vacuum_runs_after_large_deletion(self, _log):
+        cursor = mock.MagicMock()
+        cursor.rowcount = 6000
+        connection = mock.MagicMock()
+        connection.execute.return_value = cursor
+        connection.__enter__.return_value = connection
+
+        with mock.patch.object(
+            selector, "open_discovery_db", return_value=connection
+        ):
+            deleted = selector.cleanup_discovery_history(
+                30, vacuum_after_deleted_rows=5000
+            )
+
+        self.assertEqual(deleted, 6000)
+        executed = [call.args[0] for call in connection.execute.call_args_list]
+        self.assertIn("VACUUM", executed)
+
+    @mock.patch.object(selector, "log")
+    def test_vacuum_skipped_below_threshold(self, _log):
+        cursor = mock.MagicMock()
+        cursor.rowcount = 4999
+        connection = mock.MagicMock()
+        connection.execute.return_value = cursor
+        connection.__enter__.return_value = connection
+
+        with mock.patch.object(
+            selector, "open_discovery_db", return_value=connection
+        ):
+            deleted = selector.cleanup_discovery_history(
+                30, vacuum_after_deleted_rows=5000
+            )
+
+        self.assertEqual(deleted, 4999)
+        executed = [call.args[0] for call in connection.execute.call_args_list]
+        self.assertNotIn("VACUUM", executed)
+
 
 class AtomicFileTests(unittest.TestCase):
     def test_copy_file_atomic_replaces_target_without_temp_file(self):

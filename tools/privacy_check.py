@@ -36,17 +36,38 @@ SENSITIVE_DIRECTORIES = {
     "providers",
     "venv",
 }
-TEXT_SUFFIXES = {
-    "",
-    ".bat",
-    ".cmd",
-    ".json",
-    ".md",
-    ".ps1",
-    ".py",
-    ".txt",
-    ".yaml",
-    ".yml",
+# Known binary formats are skipped; every other file is checked as text so
+# new text file types (.toml, .cfg, .psd1, ...) are covered automatically.
+BINARY_SUFFIXES = {
+    ".7z",
+    ".bmp",
+    ".db",
+    ".dll",
+    ".eot",
+    ".exe",
+    ".gif",
+    ".gz",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".mo",
+    ".otf",
+    ".pdf",
+    ".png",
+    ".pyc",
+    ".pyd",
+    ".rar",
+    ".so",
+    ".sqlite",
+    ".sqlite3",
+    ".tar",
+    ".ttf",
+    ".webp",
+    ".whl",
+    ".woff",
+    ".woff2",
+    ".xz",
+    ".zip",
 }
 SENSITIVE_FILE_NAMES = {
     "best_ips.txt",
@@ -188,14 +209,28 @@ def is_sensitive_tracked_path(relative_path: Path) -> bool:
     )
 
 
-def read_text(path: Path) -> str | None:
-    if path.suffix.lower() not in TEXT_SUFFIXES:
+MAX_TEXT_BYTES = 2_000_000
+
+
+def read_text(path: Path, suspected_binaries: set[str]) -> str | None:
+    """Decode a publishable file as text.
+
+    Files with known binary suffixes are skipped silently. Any other file
+    that cannot be decoded as UTF-8 is recorded as a suspected binary so
+    unknown binary formats stay visible instead of silently bypassing the
+    text checks.
+    """
+    if path.suffix.lower() in BINARY_SUFFIXES:
         return None
     try:
-        if path.stat().st_size > 2_000_000:
+        if path.stat().st_size > MAX_TEXT_BYTES:
+            suspected_binaries.add(relative(path))
             return None
         return path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeError):
+    except UnicodeError:
+        suspected_binaries.add(relative(path))
+        return None
+    except OSError:
         return None
 
 
@@ -307,10 +342,11 @@ def main() -> int:
 
     check_gitignore(findings)
     checked = 0
+    suspected_binaries: set[str] = set()
     checker_path = Path(__file__).resolve()
     for path in iter_publishable_files(findings):
         checked += 1
-        text = read_text(path)
+        text = read_text(path, suspected_binaries)
         if text is None:
             continue
         if path.resolve() != checker_path:
@@ -330,6 +366,8 @@ def main() -> int:
             print(f"{path}: {category}")
         return 1
 
+    for name in sorted(suspected_binaries):
+        print(f"privacy check: {name}: 疑似二进制已跳过")
     print(f"privacy check: OK ({checked} publishable files checked)")
     return 0
 
