@@ -2,7 +2,7 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
-## 未发布
+## [v1.3.1](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.1) — 2026-07-24
 
 - 通知 HTML 在保留天数之外新增最大文件数限制，默认只保留最新 100 份，避免半小时任务长期产生上千个报告；
 - `notification_delivery.log` 和健康监控启动器错误日志新增按大小轮转，默认每份 1 MB、保留 2 份备份；
