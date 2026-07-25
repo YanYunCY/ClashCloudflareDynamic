@@ -408,6 +408,37 @@ def defer_deep_scan_if_busy(
     return max_deferrals
 
 
+def should_force_deep_scan(settings: dict[str, Any]) -> bool:
+    """Return True when the deep-scan skip streak has exceeded the threshold.
+
+    Reads ``skip_streak_started_at`` from the last-run status file written by
+    ``write_run_status``.  The field is preserved across consecutive skips and
+    absent after a successful or failed (i.e. actually-executed) scan, so its
+    age directly measures how long deep scans have been continuously deferred.
+    """
+    if not bool(settings.get("deep_scan_force_enabled", True)):
+        return False
+    try:
+        threshold_hours = max(
+            0.5, float(settings.get("deep_scan_force_after_skipped_hours", 8.0))
+        )
+    except (TypeError, ValueError):
+        threshold_hours = 8.0
+    data = load_json(DEEP_RUN_STATUS_PATH, {})
+    if not isinstance(data, dict) or data.get("status") != "skipped":
+        return False
+    streak_start = data.get("skip_streak_started_at")
+    if not streak_start:
+        return False
+    parsed = parse_time(str(streak_start))
+    if parsed is None:
+        return False
+    elapsed_hours = (
+        dt.datetime.now().astimezone() - parsed
+    ).total_seconds() / 3600
+    return elapsed_hours >= threshold_hours
+
+
 def notification_report_path_is_safe(path: Path) -> bool:
     try:
         resolved = path.resolve(strict=True)
@@ -1254,6 +1285,18 @@ def write_run_status(
     }
     if isinstance(summary, dict):
         payload["scan_summary"] = summary
+    # Carry forward the skip-streak start time so the force-run check can
+    # measure how long the deep scan has been continuously deferred.  The
+    # field is only set on deep-scan skips; success/failed runs omit it,
+    # which implicitly resets the streak.
+    if not quick and normalized_status == "skipped":
+        previous = load_json(path, {})
+        existing_streak = (
+            previous.get("skip_streak_started_at")
+            if isinstance(previous, dict)
+            else None
+        )
+        payload["skip_streak_started_at"] = existing_streak or payload["completed_at"]
     save_json_atomic(path, payload)
     return path
 
@@ -3480,16 +3523,28 @@ def main() -> int:
 
         set_low_process_priority()
         enter_stage("等待前台空闲", "startup")
-        deferred_result = defer_deep_scan_if_busy(settings, args.quick)
-        if deferred_result is None:
-            try_write_run_status(
-                args.quick,
-                "skipped",
-                run_started_at,
-                reason="前台持续繁忙，本轮深度扫描已跳过",
+        if not args.quick and should_force_deep_scan(settings):
+            try:
+                threshold_str = f"{float(settings.get('deep_scan_force_after_skipped_hours', 8.0)):.0f}"
+            except (TypeError, ValueError):
+                threshold_str = "8"
+            force_msg = (
+                f"深度扫描已连续跳过超过 {threshold_str} 小时，"
+                "本次忽略前台状态强制执行"
             )
-            return 0
-        deferred_count = deferred_result
+            log(force_msg)
+            send_windows_notification("Clash 深度扫描：强制执行", force_msg)
+        else:
+            deferred_result = defer_deep_scan_if_busy(settings, args.quick)
+            if deferred_result is None:
+                try_write_run_status(
+                    args.quick,
+                    "skipped",
+                    run_started_at,
+                    reason="前台持续繁忙，本轮深度扫描已跳过",
+                )
+                return 0
+            deferred_count = deferred_result
 
         enter_stage("加载模板", "maintenance")
         template = load_template()

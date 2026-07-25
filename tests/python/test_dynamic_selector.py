@@ -1,4 +1,5 @@
 import csv
+import datetime as dt
 import json
 import os
 import random
@@ -1705,6 +1706,134 @@ class DeepScanDeferralTests(unittest.TestCase):
         )
         sleep.assert_not_called()
         busy_reason.assert_not_called()
+
+
+class ForceDeepScanTests(unittest.TestCase):
+    """Tests for should_force_deep_scan and the skip-streak tracking in write_run_status."""
+
+    def _write_status(self, tmp_path: str, payload: dict) -> None:
+        import json
+        from pathlib import Path
+        Path(tmp_path).write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+
+    def test_not_triggered_when_last_run_was_success(self):
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w", encoding="utf-8"
+        ) as f:
+            json.dump({"status": "success"}, f)
+            tmp = f.name
+        try:
+            with mock.patch.object(selector, "DEEP_RUN_STATUS_PATH", Path(tmp)):
+                self.assertFalse(selector.should_force_deep_scan({}))
+        finally:
+            os.unlink(tmp)
+
+    def test_not_triggered_when_no_streak_start_field(self):
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w", encoding="utf-8"
+        ) as f:
+            json.dump({"status": "skipped"}, f)
+            tmp = f.name
+        try:
+            with mock.patch.object(selector, "DEEP_RUN_STATUS_PATH", Path(tmp)):
+                self.assertFalse(selector.should_force_deep_scan({}))
+        finally:
+            os.unlink(tmp)
+
+    def test_triggered_when_streak_exceeds_threshold(self):
+        past = (
+            dt.datetime.now().astimezone() - dt.timedelta(hours=9)
+        ).isoformat()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w", encoding="utf-8"
+        ) as f:
+            json.dump({"status": "skipped", "skip_streak_started_at": past}, f)
+            tmp = f.name
+        try:
+            with mock.patch.object(selector, "DEEP_RUN_STATUS_PATH", Path(tmp)):
+                self.assertTrue(
+                    selector.should_force_deep_scan(
+                        {"deep_scan_force_after_skipped_hours": 8.0}
+                    )
+                )
+        finally:
+            os.unlink(tmp)
+
+    def test_not_triggered_when_streak_below_threshold(self):
+        recent = (
+            dt.datetime.now().astimezone() - dt.timedelta(hours=3)
+        ).isoformat()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w", encoding="utf-8"
+        ) as f:
+            json.dump({"status": "skipped", "skip_streak_started_at": recent}, f)
+            tmp = f.name
+        try:
+            with mock.patch.object(selector, "DEEP_RUN_STATUS_PATH", Path(tmp)):
+                self.assertFalse(
+                    selector.should_force_deep_scan(
+                        {"deep_scan_force_after_skipped_hours": 8.0}
+                    )
+                )
+        finally:
+            os.unlink(tmp)
+
+    def test_not_triggered_when_force_disabled(self):
+        past = (
+            dt.datetime.now().astimezone() - dt.timedelta(hours=24)
+        ).isoformat()
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False, mode="w", encoding="utf-8"
+        ) as f:
+            json.dump({"status": "skipped", "skip_streak_started_at": past}, f)
+            tmp = f.name
+        try:
+            with mock.patch.object(selector, "DEEP_RUN_STATUS_PATH", Path(tmp)):
+                self.assertFalse(
+                    selector.should_force_deep_scan({"deep_scan_force_enabled": False})
+                )
+        finally:
+            os.unlink(tmp)
+
+    def test_skip_streak_preserved_across_consecutive_skips(self):
+        """The streak start time must survive multiple consecutive skip writes."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status_path = Path(tmpdir) / "last_run_deep.json"
+            started = (
+                dt.datetime.now().astimezone() - dt.timedelta(hours=1)
+            ).isoformat()
+            with (
+                mock.patch.object(selector, "DEEP_RUN_STATUS_PATH", status_path),
+                mock.patch.object(selector, "LOG_DIR", Path(tmpdir)),
+            ):
+                # First skip – sets skip_streak_started_at
+                selector.write_run_status(False, "skipped", started, reason="busy")
+                first_data = json.loads(status_path.read_text(encoding="utf-8"))
+                first_streak = first_data.get("skip_streak_started_at")
+                self.assertIsNotNone(first_streak)
+
+                # Second skip – must carry the same streak start
+                selector.write_run_status(False, "skipped", started, reason="busy")
+                second_data = json.loads(status_path.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    second_data.get("skip_streak_started_at"), first_streak
+                )
+
+    def test_skip_streak_cleared_after_success(self):
+        """A success write must not include skip_streak_started_at."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status_path = Path(tmpdir) / "last_run_deep.json"
+            started = dt.datetime.now().astimezone().isoformat()
+            with (
+                mock.patch.object(selector, "DEEP_RUN_STATUS_PATH", status_path),
+                mock.patch.object(selector, "LOG_DIR", Path(tmpdir)),
+            ):
+                selector.write_run_status(False, "skipped", started)
+                selector.write_run_status(False, "success", started)
+                data = json.loads(status_path.read_text(encoding="utf-8"))
+                self.assertNotIn("skip_streak_started_at", data)
 
 
 class NotificationTests(unittest.TestCase):

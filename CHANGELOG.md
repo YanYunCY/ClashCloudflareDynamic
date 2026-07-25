@@ -2,6 +2,10 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.3.5](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.5) — 2026-07-25
+
+- 新增深度扫描强制执行机制：当深扫连续因前台繁忙被跳过超过阈值（默认 8 小时，可通过 `deep_scan_force_after_skipped_hours` 调整）后，下一次触发将忽略前台状态强制执行，并推送通知；可通过 `deep_scan_force_enabled: false` 完全禁用。
+
 ## [v1.3.4](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.4) — 2026-07-24
 
 - 新增 `tools/sync_check.py` 三方代码同步对账工具与 `config/sync_markers.json` 特征清单，检测开源版、部署版与镜像之间的关键修复漏同步；

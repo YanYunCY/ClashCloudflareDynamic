@@ -63,5 +63,7 @@
   "deep_scan_busy_deferral_enabled": true,
   "deep_scan_recent_input_seconds": 120,
   "deep_scan_deferral_minutes": 15,
-  "deep_scan_max_deferrals": 4
+  "deep_scan_max_deferrals": 4,
+  "deep_scan_force_enabled": true,
+  "deep_scan_force_after_skipped_hours": 8.0
 }

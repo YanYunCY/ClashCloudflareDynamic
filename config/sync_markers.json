@@ -89,6 +89,22 @@
       "pattern": "stream.reconfigure(encoding=\"utf-8\"",
       "min_count": 1,
       "added_in": "v1.3.4"
+    },
+    {
+      "id": "force-deep-scan-function",
+      "description": "should_force_deep_scan：连续跳过超阈值后强制执行深扫",
+      "file": "dynamic_selector.py",
+      "pattern": "def should_force_deep_scan",
+      "min_count": 1,
+      "added_in": "v1.3.5"
+    },
+    {
+      "id": "skip-streak-tracking",
+      "description": "write_run_status 在深扫 skipped 时持久化 skip_streak_started_at",
+      "file": "dynamic_selector.py",
+      "pattern": "skip_streak_started_at",
+      "min_count": 3,
+      "added_in": "v1.3.5"
     }
   ]
 }
