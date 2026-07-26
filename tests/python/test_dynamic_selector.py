@@ -1122,7 +1122,91 @@ class SwitchConfirmationTests(unittest.TestCase):
         self.assertEqual(state, original)
 
 
-class ProbeSelectionTests(unittest.TestCase):
+class SwitchIntervalGraceTests(unittest.TestCase):
+    """Tests for the 90-second grace period that absorbs scheduler jitter."""
+
+    def _base_settings(self, min_hours=0.5, grace_seconds=90):
+        return {
+            "auto_group": "自动选择",
+            "fast_speed_ratio": 0.95,
+            "required_consecutive_wins": 1,   # reach interval check in one round
+            "selector_confirm_timeout_seconds": 0,
+            "mihomo_poll_interval_seconds": 0.05,
+            "minimum_switch_interval_hours": min_hours,
+            "switch_interval_grace_seconds": grace_seconds,
+        }
+
+    def _ranked(self):
+        # Two candidates: best (1.2.3.4) beats current (5.6.7.8).
+        # Both must be in the ranked list so decide_switch reaches the
+        # interval check rather than the "current IP not in results" fast path.
+        return [
+            {"ip": "1.2.3.4", "speed_Mbps": 6.0, "delay_ms": 80},
+            {"ip": "5.6.7.8", "speed_Mbps": 5.0, "delay_ms": 120},
+        ]
+
+    def _last_switch_ago(self, seconds):
+        return (
+            dt.datetime.now().astimezone() - dt.timedelta(seconds=seconds)
+        ).isoformat()
+
+    def _state(self, last_switch_seconds_ago):
+        return {
+            "pending_ip": "", "pending_wins": 0,
+            "last_switch": self._last_switch_ago(last_switch_seconds_ago),
+        }
+
+    def test_blocked_when_clearly_too_soon(self):
+        """Elapsed = 10 min, threshold = 30 min → blocked even with grace."""
+        decision = selector.decide_switch(
+            None, self._base_settings(), self._ranked(), "5.6.7.8",
+            self._state(600),
+        )
+        self.assertFalse(decision["switched"])
+        self.assertIn("最小间隔", decision["reason"])
+
+    def test_allowed_when_elapsed_equals_threshold_exactly(self):
+        """Elapsed = exactly 30 min — should pass with grace period applied."""
+        class FakeAPI:
+            def select(self, g, n): pass
+            def get_proxy(self, g): return {"now": "CF-A | 1.2.3.4"}
+
+        decision = selector.decide_switch(
+            FakeAPI(), self._base_settings(), self._ranked(), "5.6.7.8",
+            self._state(1800),
+        )
+        self.assertTrue(decision["switched"])
+
+    def test_allowed_when_elapsed_is_within_grace(self):
+        """Elapsed = 29 min 30 s (30 s short) — inside 90 s grace → allowed."""
+        class FakeAPI:
+            def select(self, g, n): pass
+            def get_proxy(self, g): return {"now": "CF-A | 1.2.3.4"}
+
+        decision = selector.decide_switch(
+            FakeAPI(), self._base_settings(), self._ranked(), "5.6.7.8",
+            self._state(1800 - 30),
+        )
+        self.assertTrue(decision["switched"])
+
+    def test_blocked_when_elapsed_exceeds_grace(self):
+        """Elapsed = 29 min (91 s short) — outside 90 s grace → blocked."""
+        decision = selector.decide_switch(
+            None, self._base_settings(), self._ranked(), "5.6.7.8",
+            self._state(1800 - 91),
+        )
+        self.assertFalse(decision["switched"])
+
+    def test_grace_of_zero_restores_strict_behaviour(self):
+        """Explicitly setting grace_seconds=0 brings back the original strict check."""
+        decision = selector.decide_switch(
+            None, self._base_settings(grace_seconds=0), self._ranked(), "5.6.7.8",
+            self._state(1800 - 10),
+        )
+        self.assertFalse(decision["switched"])
+
+
+
     @mock.patch.object(selector, "load_historical_speed_scores")
     def test_probe_set_combines_latency_history_and_exploration(self, history):
         names = [f"CF-D | 1.1.1.{index}" for index in range(1, 7)]

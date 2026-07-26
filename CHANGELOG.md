@@ -2,6 +2,10 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.3.6](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.6) — 2026-07-26
+
+- 修复最小切换间隔边界条件：调度器以 30 分钟触发但扫描本身耗时数分钟，导致两次决策之间的实际间隔略小于 0.5 小时，满足条件的候选仍被拦截；新增 90 秒宽限期（`switch_interval_grace_seconds`，默认 90）吸收调度抖动，可设为 0 恢复严格行为。
+
 ## [v1.3.5](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.5) — 2026-07-25
 
 - 新增深度扫描强制执行机制：当深扫连续因前台繁忙被跳过超过阈值（默认 8 小时，可通过 `deep_scan_force_after_skipped_hours` 调整）后，下一次触发将忽略前台状态强制执行，并推送通知；可通过 `deep_scan_force_enabled: false` 完全禁用。

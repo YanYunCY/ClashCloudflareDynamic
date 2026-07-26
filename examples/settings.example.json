@@ -42,6 +42,7 @@
   "active_pool_size": 40,
   "required_consecutive_wins": 1,
   "minimum_switch_interval_hours": 0.5,
+  "switch_interval_grace_seconds": 90,
   "ranges_cache_hours": 24,
   "fast_speed_ratio": 0.95,
   "minimum_latency_gain_ms": 5,

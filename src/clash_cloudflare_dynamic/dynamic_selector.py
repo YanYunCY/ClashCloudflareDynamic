@@ -3380,7 +3380,13 @@ def decide_switch(
     min_hours = float(settings.get("minimum_switch_interval_hours", 1))
     if last_switch is not None:
         elapsed = (now() - last_switch).total_seconds() / 3600
-        if elapsed < min_hours:
+        # Allow a 90-second grace period to absorb scheduler jitter and the
+        # time spent scanning before the decision is reached.  Without it,
+        # a 30-minute task interval frequently produces elapsed ≈ 0.4997 h
+        # which is numerically less than the 0.5 h threshold even though the
+        # full interval has effectively elapsed.
+        grace_hours = float(settings.get("switch_interval_grace_seconds", 90)) / 3600
+        if elapsed < min_hours - grace_hours:
             decision["reason"] = (
                 f"候选满足条件，但距上次切换仅 {elapsed:.1f} 小时；"
                 f"最小间隔 {min_hours:g} 小时"

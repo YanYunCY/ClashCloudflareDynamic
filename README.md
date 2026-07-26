@@ -37,7 +37,8 @@ tools/privacy_check.py         发布前隐私检查
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
-| `v1.3.5` | 最新稳定版 | 深扫连续跳过8h后强制执行 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.5) |
+| `v1.3.6` | 最新稳定版 | 修复切换间隔边界条件（90秒宽限期） | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.6) |
+| `v1.3.5` | 历史稳定版 | 深扫连续跳过8h后强制执行 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.5) |
 | `v1.3.4` | 历史稳定版 | 三方同步对账、保留期30天+VACUUM、UTF-8输出、隐私检查反转 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.4) |
 | `v1.3.3` | 历史稳定版 | 粗测容错、API无代理、构建复现、备份清理、自动发布 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.3) |
 | `v1.3.2` | 历史稳定版 | 交错三轮测速、历史稳定性、正式池准入、扫描心跳 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.2) |
