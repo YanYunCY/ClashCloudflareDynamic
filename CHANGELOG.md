@@ -2,6 +2,11 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.3.7](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.7) — 2026-07-27
+
+- 修复 Cloudflare 官方网段缓存文件写入非原子：改用 temp + os.replace 模式，进程在写入途中崩溃不再产生残留的截断缓存文件；
+- 修复 `save_json_atomic` 在写入失败时遗留 `.tmp` 临时文件：加 finally 清理，与通知报告写入保持一致。
+
 ## [v1.3.6](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.6) — 2026-07-26
 
 - 修复最小切换间隔边界条件：调度器以 30 分钟触发但扫描本身耗时数分钟，导致两次决策之间的实际间隔略小于 0.5 小时，满足条件的候选仍被拦截；新增 90 秒宽限期（`switch_interval_grace_seconds`，默认 90）吸收调度抖动，可设为 0 恢复严格行为。
