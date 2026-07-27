@@ -1250,11 +1250,14 @@ def load_json(path: Path, default: Any) -> Any:
 def save_json_atomic(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(
+            json.dumps(value, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def write_run_status(
@@ -2077,9 +2080,17 @@ def load_official_ranges(
         ranges = parse_ranges(text)
         if not ranges:
             raise ValueError("官方列表为空")
-        RANGES_CACHE_PATH.write_text(
-            "\n".join(str(x) for x in ranges) + "\n", encoding="utf-8"
+        RANGES_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_cache = RANGES_CACHE_PATH.with_suffix(
+            RANGES_CACHE_PATH.suffix + ".tmp"
         )
+        try:
+            tmp_cache.write_text(
+                "\n".join(str(x) for x in ranges) + "\n", encoding="utf-8"
+            )
+            os.replace(tmp_cache, RANGES_CACHE_PATH)
+        finally:
+            tmp_cache.unlink(missing_ok=True)
         return ranges
     except Exception as exc:
         if caused_by_transport_timeout(exc) and timeout_observer:
