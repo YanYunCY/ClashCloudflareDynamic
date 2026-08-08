@@ -29,7 +29,7 @@ tools/privacy_check.py         发布前隐私检查
 
 `v1.3.0` 已把 Windows 安装器迁移为 WPF 单页界面：主配置位于左侧，脱敏实时摘要位于右侧，本地 Mihomo 连接设置默认折叠。界面支持“跟随系统 / 浅色 / 深色”，使用系统强调色、轻量设置卡片和响应式布局；窄窗口会收起摘要，表单可独立滚动且底部操作栏保持固定。安装器也针对 Per-Monitor V2 DPI、ClearType 和布局像素对齐做了专门处理。
 
-`v1.4.0` 候选版把深扫正式测速提高到 20 MB，并将轻扫固定为独立的 3 MB/20 秒上限；吞吐只按响应体传输时间计算，降低 TTFB 和慢启动对短样本的干扰。
+`v1.4.0` 候选版把深扫正式测速提高到 20 MB，并将轻扫固定为独立的 3 MB/20 秒上限；吞吐只按响应体传输时间计算，降低 TTFB 和慢启动对短样本的干扰；扫描结束后会恢复测速域名出口，独立测速出口还可直接跟随自动组，不再让手工测速误用最后一个临时候选。
 
 ## 版本与下载
 
@@ -37,7 +37,7 @@ tools/privacy_check.py         发布前隐私检查
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
-| `v1.4.0` | 待发布候选版 | 三线路测速口径统一、深扫 20 MB、Release 完整门禁 | 本地构建验证中 |
+| `v1.4.0` | 待发布候选版 | 测速口径统一、深扫 20 MB、测速出口恢复、Release 完整门禁 | 本地构建验证中 |
 | `v1.3.7` | 最新稳定版 | 修复 ranges cache 和 JSON 临时文件原子写入 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.7) |
 | `v1.3.6` | 历史稳定版 | 修复切换间隔边界条件（90秒宽限期） | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.6) |
 | `v1.3.5` | 历史稳定版 | 深扫连续跳过8h后强制执行 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.5) |
@@ -96,6 +96,7 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 - 轻量扫描：基础最多 8 个正式候选，每次 3 MB、单次超时 20 秒；当前节点未入选时会额外追加，正式测速理论上限约 81 MB/轮；
 - `quick_speed_test_bytes` 与 `quick_speed_timeout_seconds` 独立于深扫参数，调整深扫不会再意外放大半小时轻扫流量；
 - 速度按下载响应体的实际传输时间计算，同时保留含连接与 TTFB 的全程平均速度用于诊断。
+- 扫描成功、失败或节点选择确认超时后，测速域名使用的发现组会优先恢复到当前自动节点；若配置的独立测速出口包含自动组，则直接恢复为跟随自动组；首选恢复失败时回退到扫描前状态。
 
 正式测速前仍会发起 128 KB 预热请求，预热值不参与排名。以上均为候选满额时的理论上限，实际流量通常更低。
 
@@ -225,7 +226,8 @@ git status --ignored --short
 7. 高速组内按三轮平均延迟选择节点；
 8. 历史速度按每个 IP 最近 `historical_speed_samples_per_ip` 次结果加权，并使用 `historical_speed_stability_penalty` 惩罚波动；
 9. 正式池默认只新增通过正式下载测速的节点，旧正式池有效节点继续保留；只有显式设置 `allow_delay_only_pool_backfill: true` 才允许仅通过延迟测试的新节点补池；
-10. 正常切换受冷却时间控制，失效节点可以立即替换。
+10. 正常切换受冷却时间控制，失效节点可以立即替换；
+11. 扫描退出前恢复测速域名出口，避免浏览器测速继续命中临时候选。
 
 ## 通知与 HTML 报告中的阶段漏斗
 

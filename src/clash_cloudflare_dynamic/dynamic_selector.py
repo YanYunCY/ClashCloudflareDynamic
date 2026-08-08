@@ -1881,6 +1881,155 @@ def select_proxy_and_wait(
     )
 
 
+def capture_speed_route_state(
+    api: Any, settings: dict[str, Any]
+) -> dict[str, Any]:
+    """Capture selector state before speed.cloudflare.com is redirected."""
+    discovery_group = str(settings.get("discovery_group", "")).strip()
+    if not discovery_group:
+        raise ValueError("discovery_group 不能为空")
+
+    speed_route_group = str(settings.get("speed_route_group", "")).strip()
+    state: dict[str, Any] = {
+        "discovery_group": discovery_group,
+        "discovery_now": "",
+        "speed_route_group": speed_route_group,
+        "speed_route_now": "",
+        "capture_error": "",
+    }
+    errors: list[str] = []
+    try:
+        state["discovery_now"] = str(
+            api.get_proxy(discovery_group).get("now", "")
+        ).strip()
+    except Exception as exc:
+        errors.append(f"读取发现组失败：{exc}")
+    if speed_route_group:
+        try:
+            state["speed_route_now"] = str(
+                api.get_proxy(speed_route_group).get("now", "")
+            ).strip()
+        except Exception as exc:
+            errors.append(f"读取测速出口失败：{exc}")
+    state["capture_error"] = "；".join(errors)
+    return state
+
+
+def restore_speed_route(
+    api: Any,
+    settings: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Restore speed-test routing to current auto IP, then pre-scan state."""
+    discovery_group = str(state.get("discovery_group", "")).strip()
+    speed_route_group = str(state.get("speed_route_group", "")).strip()
+    timeout = settings.get("selector_confirm_timeout_seconds", 3.0)
+    poll_interval = settings.get("mihomo_poll_interval_seconds", 0.05)
+    target_name = ""
+
+    try:
+        auto_group = str(settings.get("auto_group", "")).strip()
+        if not auto_group:
+            raise ValueError("auto_group 不能为空")
+        if speed_route_group:
+            speed_route_info = api.get_proxy(speed_route_group)
+            speed_route_members = {
+                str(name)
+                for name in speed_route_info.get("all", [])
+                if str(name).strip()
+            }
+            if auto_group in speed_route_members:
+                select_proxy_and_wait(
+                    api,
+                    speed_route_group,
+                    auto_group,
+                    timeout,
+                    poll_interval,
+                )
+                return {
+                    "ok": True,
+                    "used_fallback": False,
+                    "target": auto_group,
+                    "error": "",
+                }
+        auto_now = str(api.get_proxy(auto_group).get("now", "")).strip()
+        auto_ip = ip_from_node_name(auto_now)
+        if not auto_ip:
+            raise RuntimeError(f"当前自动节点无法解析 IP：{auto_now or '空'}")
+        prefix = str(settings.get("discovery_node_prefix", "CF-D")).strip()
+        target_name = f"{prefix} | {auto_ip}"
+        discovery_info = api.get_proxy(discovery_group)
+        members = {
+            str(name)
+            for name in discovery_info.get("all", [])
+            if str(name).strip()
+        }
+        if members and target_name not in members:
+            raise RuntimeError(f"发现组中不存在当前自动节点 {target_name}")
+        select_proxy_and_wait(
+            api,
+            discovery_group,
+            target_name,
+            timeout,
+            poll_interval,
+        )
+        if speed_route_group:
+            select_proxy_and_wait(
+                api,
+                speed_route_group,
+                discovery_group,
+                timeout,
+                poll_interval,
+            )
+        return {
+            "ok": True,
+            "used_fallback": False,
+            "target": target_name,
+            "error": "",
+        }
+    except Exception as primary_exc:
+        rollback_errors: list[str] = []
+        discovery_now = str(state.get("discovery_now", "")).strip()
+        speed_route_now = str(state.get("speed_route_now", "")).strip()
+        if discovery_now:
+            try:
+                select_proxy_and_wait(
+                    api,
+                    discovery_group,
+                    discovery_now,
+                    timeout,
+                    poll_interval,
+                )
+            except Exception as exc:
+                rollback_errors.append(f"发现组回退失败：{exc}")
+        else:
+            rollback_errors.append("扫描前发现组状态未知")
+        if speed_route_group:
+            if speed_route_now:
+                try:
+                    select_proxy_and_wait(
+                        api,
+                        speed_route_group,
+                        speed_route_now,
+                        timeout,
+                        poll_interval,
+                    )
+                except Exception as exc:
+                    rollback_errors.append(f"测速出口回退失败：{exc}")
+            else:
+                rollback_errors.append("扫描前测速出口状态未知")
+
+        error = f"首选恢复失败：{primary_exc}"
+        if rollback_errors:
+            error += "；" + "；".join(rollback_errors)
+        return {
+            "ok": not rollback_errors,
+            "used_fallback": True,
+            "target": target_name,
+            "error": error,
+        }
+
+
 def wait_for_group_members(
     api: Any,
     group: str,
@@ -3501,6 +3650,8 @@ def main() -> int:
     args = parser.parse_args()
 
     lock_handle: Any | None = None
+    api: MihomoAPI | None = None
+    speed_route_state: dict[str, Any] | None = None
     settings: dict[str, Any] = {}
     failed_ips: set[str] = set()
     failure_summary: dict[str, Any] = {}
@@ -3833,6 +3984,9 @@ def main() -> int:
         )
 
         enter_stage("速度粗测", "speed_probe")
+        speed_route_state = capture_speed_route_state(api, settings)
+        if speed_route_state.get("capture_error"):
+            log(f"测速出口扫描前状态读取不完整：{speed_route_state['capture_error']}")
         probe_rows: list[dict[str, Any]] = []
         for index, node_name in enumerate(probe_names, 1):
             ip = ip_from_node_name(node_name)
@@ -4397,6 +4551,14 @@ def main() -> int:
             )
         return 1
     finally:
+        if api is not None and speed_route_state is not None:
+            restore_result = restore_speed_route(api, settings, speed_route_state)
+            if restore_result["ok"] and not restore_result["used_fallback"]:
+                log(f"测速出口已恢复到当前自动节点：{restore_result['target']}")
+            elif restore_result["ok"]:
+                log(f"测速出口首选恢复失败，已回退扫描前状态：{restore_result['error']}")
+            else:
+                log(f"测速出口恢复失败：{restore_result['error']}")
         if lock_handle is not None:
             release_run_lock(lock_handle)
 

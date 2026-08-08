@@ -350,6 +350,13 @@ function Install-ToastShortcut(
     [string]$AppUserModelId,
     [string]$InstallDirectory
 ) {
+    $WindowsRoot = [string]$env:SystemRoot
+    if ([string]::IsNullOrWhiteSpace($WindowsRoot)) {
+        $WindowsRoot = [string]$env:WINDIR
+    }
+    if ([string]::IsNullOrWhiteSpace($WindowsRoot)) {
+        throw "无法确定 Windows 系统目录，不能创建开始菜单快捷方式。"
+    }
     $ShortcutDirectory = Split-Path -Parent $ShortcutPath
     New-Item -ItemType Directory -Path $ShortcutDirectory -Force | Out-Null
 
@@ -358,11 +365,11 @@ function Install-ToastShortcut(
     try {
         $WshShell = New-Object -ComObject WScript.Shell
         $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
-        $Shortcut.TargetPath = Join-Path $env:WINDIR "explorer.exe"
+        $Shortcut.TargetPath = Join-Path $WindowsRoot "explorer.exe"
         $Shortcut.Arguments = "`"$InstallDirectory`""
         $Shortcut.WorkingDirectory = $InstallDirectory
         $Shortcut.Description = "Clash Cloudflare Dynamic"
-        $Shortcut.IconLocation = (Join-Path $env:SystemRoot "System32\shell32.dll") + ",14"
+        $Shortcut.IconLocation = (Join-Path $WindowsRoot "System32\shell32.dll") + ",14"
         $Shortcut.Save()
     } finally {
         if ($null -ne $Shortcut) {

@@ -129,6 +129,14 @@
       "pattern": "skip_streak_started_at",
       "min_count": 3,
       "added_in": "v1.3.5"
+    },
+    {
+      "id": "speed-route-restoration",
+      "description": "扫描结束后把测速域名出口恢复到当前自动节点，失败时回退扫描前状态",
+      "file": "dynamic_selector.py",
+      "pattern": "def restore_speed_route",
+      "min_count": 1,
+      "added_in": "v1.4.0"
     }
   ]
 }

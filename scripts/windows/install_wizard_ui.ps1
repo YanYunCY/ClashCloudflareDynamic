@@ -1,6 +1,10 @@
 ﻿#requires -Version 5.1
 
 function Initialize-WpfRuntime {
+    if ([string]::IsNullOrWhiteSpace([string]$env:WINDIR) -and
+        -not [string]::IsNullOrWhiteSpace([string]$env:SystemRoot)) {
+        $env:WINDIR = $env:SystemRoot
+    }
     if (-not ("Cfdyn.WpfNativeMethods" -as [type])) {
         Add-Type -TypeDefinition @"
 using System;

@@ -497,6 +497,120 @@ class MihomoPollingTests(unittest.TestCase):
         self.assertEqual(calls, [0.0])
 
 
+class SpeedRouteRestorationTests(unittest.TestCase):
+    class StateAPI:
+        def __init__(self):
+            self.states = {
+                "发现测速": {
+                    "now": "CF-D | 1.1.1.1",
+                    "all": ["CF-D | 1.1.1.1", "CF-D | 2.2.2.2"],
+                },
+                "测速出口": {
+                    "now": "其他出口",
+                    "all": ["其他出口", "自动选择", "发现测速"],
+                },
+                "自动选择": {"now": "CF-A | 2.2.2.2"},
+            }
+            self.select_calls = []
+
+        def get_proxy(self, group):
+            return dict(self.states[group])
+
+        def select(self, group, node):
+            self.select_calls.append((group, node))
+            self.states[group]["now"] = node
+
+    @staticmethod
+    def settings():
+        return {
+            "discovery_group": "发现测速",
+            "speed_route_group": "测速出口",
+            "auto_group": "自动选择",
+            "discovery_node_prefix": "CF-D",
+            "selector_confirm_timeout_seconds": 0.1,
+            "mihomo_poll_interval_seconds": 0.02,
+        }
+
+    def test_speed_group_follows_auto_group(self):
+        api = self.StateAPI()
+        settings = self.settings()
+        state = selector.capture_speed_route_state(api, settings)
+
+        result = selector.restore_speed_route(api, settings, state)
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["used_fallback"])
+        self.assertEqual(api.states["发现测速"]["now"], "CF-D | 1.1.1.1")
+        self.assertEqual(api.states["测速出口"]["now"], "自动选择")
+
+    def test_without_outer_speed_group_restores_current_auto_ip(self):
+        api = self.StateAPI()
+        settings = self.settings()
+        settings["speed_route_group"] = ""
+        state = selector.capture_speed_route_state(api, settings)
+
+        result = selector.restore_speed_route(api, settings, state)
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["used_fallback"])
+        self.assertEqual(api.states["发现测速"]["now"], "CF-D | 2.2.2.2")
+
+    def test_missing_current_node_falls_back_to_pre_scan_state(self):
+        api = self.StateAPI()
+        settings = self.settings()
+        state = selector.capture_speed_route_state(api, settings)
+        api.states["测速出口"]["all"].remove("自动选择")
+        api.states["自动选择"]["now"] = "CF-A | 3.3.3.3"
+
+        result = selector.restore_speed_route(api, settings, state)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["used_fallback"])
+        self.assertEqual(api.states["发现测速"]["now"], "CF-D | 1.1.1.1")
+        self.assertEqual(api.states["测速出口"]["now"], "其他出口")
+
+    def test_confirmation_timeout_rolls_back_both_groups(self):
+        api = self.StateAPI()
+        settings = self.settings()
+        state = selector.capture_speed_route_state(api, settings)
+        calls = []
+
+        def select_with_timeout(_api, group, node, *_args, **_kwargs):
+            calls.append((group, node))
+            if len(calls) == 1:
+                raise selector.MihomoConfirmationTimeout("模拟确认超时")
+            api.states[group]["now"] = node
+            return {"now": node}
+
+        with mock.patch.object(
+            selector, "select_proxy_and_wait", side_effect=select_with_timeout
+        ):
+            result = selector.restore_speed_route(api, settings, state)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["used_fallback"])
+        self.assertEqual(api.states["发现测速"]["now"], "CF-D | 1.1.1.1")
+        self.assertEqual(api.states["测速出口"]["now"], "其他出口")
+        self.assertIn("模拟确认超时", result["error"])
+
+    def test_reports_failure_when_preferred_and_rollback_both_fail(self):
+        api = self.StateAPI()
+        settings = self.settings()
+        state = selector.capture_speed_route_state(api, settings)
+        api.states["自动选择"]["now"] = "无法解析的节点"
+
+        with mock.patch.object(
+            selector,
+            "select_proxy_and_wait",
+            side_effect=selector.MihomoConfirmationTimeout("持续超时"),
+        ):
+            result = selector.restore_speed_route(api, settings, state)
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["used_fallback"])
+        self.assertIn("回退失败", result["error"])
+
+
 class AveragingTests(unittest.TestCase):
     def test_delay_transport_timeout_is_counted(self):
         api = mock.Mock()
