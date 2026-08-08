@@ -792,6 +792,8 @@ class SpeedJsonTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn("speed_Mbps", result)
         self.assertIn("speed_MB_per_s", result)
+        self.assertEqual(result["speed_Mbps"], 8.89)
+        self.assertEqual(result["connection_average_speed_Mbps"], 4.0)
         self.assertNotIn("speed_MBps", result)
         self.assertEqual(
             len({key.casefold() for key in result}),

@@ -2,6 +2,15 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.4.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.4.0) — 2026-08-08
+
+- 正式下载吞吐改为按响应体传输时间计算，排除 TTFB 对短样本的系统性压低，同时保留含连接阶段的全程平均速度供诊断；
+- 深度扫描默认提高为每次 20 MB、单次超时 60 秒，降低慢启动和小样本噪声；
+- 轻量扫描新增独立的 `quick_speed_test_bytes=3000000` 与 `quick_speed_timeout_seconds=20`，避免深扫参数放大半小时任务流量；
+- 正式测速与速度粗测保留真实链路预热，三次样本、平均值、标准差与 CV 的准入规则不变；
+- Release 工作流新增标签/CHANGELOG 严格匹配、JSON/BOM、Python 编译与单测、PowerShell 解析、Windows 安装隔离测试及隐私检查门禁，验证未通过时不再创建 Release；
+- README 安装入口改为 `releases/latest`，避免继续指向历史版本。
+
 ## [v1.3.7](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.7) — 2026-07-27
 
 - 修复 Cloudflare 官方网段缓存文件写入非原子：改用 temp + os.replace 模式，进程在写入途中崩溃不再产生残留的截断缓存文件；

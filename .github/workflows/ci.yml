@@ -36,11 +36,19 @@ jobs:
             src/clash_cloudflare_dynamic/health_monitor_launcher.py `
             src/clash_cloudflare_dynamic/storage_maintenance.py `
             tools/build_release.py `
-            tools/privacy_check.py
+            tools/privacy_check.py `
+            tools/sync_check.py
 
       - name: Build deployment bundle from source
         shell: pwsh
         run: python tools/build_release.py
+
+      - name: Validate source synchronization markers
+        shell: pwsh
+        run: |
+          python tools/sync_check.py `
+            --manifest config/sync_markers.json `
+            --line opensource=src/clash_cloudflare_dynamic
 
       - name: Run Python unit tests
         shell: pwsh

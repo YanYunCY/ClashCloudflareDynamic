@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 import zipfile
@@ -45,6 +46,16 @@ class ReleaseBuildTests(unittest.TestCase):
                         self.assertNotIn(b"\r", data)
                     if relative.suffix.casefold() == ".ps1":
                         self.assertTrue(data.startswith(build_release.UTF8_BOM))
+
+            settings = json.loads(
+                (package_root / "examples" / "settings.example.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(settings["speed_test_bytes"], 20_000_000)
+            self.assertEqual(settings["speed_timeout_seconds"], 60)
+            self.assertEqual(settings["quick_speed_test_bytes"], 3_000_000)
+            self.assertEqual(settings["quick_speed_timeout_seconds"], 20)
 
             with zipfile.ZipFile(archive_path) as archive:
                 archived = set(archive.namelist())

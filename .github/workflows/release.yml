@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: windows-latest
@@ -22,26 +26,97 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Run privacy check
+      - name: Validate tag and extract release notes
         shell: pwsh
-        run: python tools/privacy_check.py
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python -c "import re,os,pathlib; tag=os.environ['TAG']; text=pathlib.Path('CHANGELOG.md').read_text(encoding='utf-8'); m=re.search(r'(?m)^## \['+re.escape(tag)+r'\][^\n]*\n(.*?)(?=^## |\Z)',text,re.DOTALL); assert m, f'CHANGELOG.md missing release section for {tag}'; pathlib.Path('dist').mkdir(exist_ok=True); pathlib.Path('dist/release_notes.tmp').write_text(m.group(1).strip(),encoding='utf-8')"
+
+      - name: Validate example JSON and UTF-8 without BOM
+        shell: pwsh
+        run: |
+          python -c "import json,pathlib; files=list(pathlib.Path('examples').glob('*.json')); [json.loads(p.read_text(encoding='utf-8')) for p in files]; assert files and all(not p.read_bytes().startswith(b'\xef\xbb\xbf') for p in files)"
+
+      - name: Compile Python
+        shell: pwsh
+        run: |
+          python -m py_compile `
+            src/clash_cloudflare_dynamic/__init__.py `
+            src/clash_cloudflare_dynamic/dynamic_selector.py `
+            src/clash_cloudflare_dynamic/health_monitor_launcher.py `
+            src/clash_cloudflare_dynamic/storage_maintenance.py `
+            tools/build_release.py `
+            tools/privacy_check.py `
+            tools/sync_check.py
 
       - name: Build release package
         shell: pwsh
         run: python tools/build_release.py
+
+      - name: Validate source synchronization markers
+        shell: pwsh
+        run: |
+          python tools/sync_check.py `
+            --manifest config/sync_markers.json `
+            --line opensource=src/clash_cloudflare_dynamic
+
+      - name: Run Python unit tests
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = Join-Path $PWD "src"
+          python -W error::ResourceWarning -m unittest discover -s tests/python -p "test_*.py" -v
+
+      - name: Parse PowerShell scripts
+        shell: powershell
+        run: |
+          $failed = $false
+          Get-ChildItem -Recurse -File -Filter *.ps1 | ForEach-Object {
+            $bytes = [IO.File]::ReadAllBytes($_.FullName)
+            if ($bytes.Length -lt 3 -or $bytes[0] -ne 0xEF -or
+                $bytes[1] -ne 0xBB -or $bytes[2] -ne 0xBF) {
+              $failed = $true
+              Write-Error "PowerShell UTF-8 BOM missing: $($_.FullName)"
+            }
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Error "PowerShell parse failed: $($_.FullName)"
+            }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Run Windows installer isolation tests
+        shell: powershell
+        run: |
+          ./tests/windows/test_setup.ps1
+          ./tests/windows/test_install_wizard.ps1
+          ./tests/windows/test_install_hybrid.ps1
+          ./tests/windows/test_uninstall.ps1
+
+      - name: Remove generated caches
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Directory |
+            Where-Object { $_.Name -in @("__pycache__", "logs") } |
+            Sort-Object FullName -Descending |
+            Remove-Item -Recurse -Force
+
+      - name: Run privacy check
+        shell: pwsh
+        run: python tools/privacy_check.py
 
       - name: Compute SHA-256
         shell: pwsh
         run: |
           $hash = (Get-FileHash dist\ClashCloudflareDynamic.zip -Algorithm SHA256).Hash
           Set-Content -Path dist\ClashCloudflareDynamic.zip.sha256 -Value $hash -Encoding UTF8NoBOM
-
-      - name: Extract release notes from CHANGELOG
-        shell: pwsh
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          python -c "import re,os,pathlib; tag=os.environ['TAG']; text=pathlib.Path('CHANGELOG.md').read_text(encoding='utf-8'); m=re.search(r'(?m)^## \['+re.escape(tag)+r'\][^\n]*\n(.*?)(?=^## |\Z)',text,re.DOTALL); pathlib.Path('dist/release_notes.tmp').write_text(m.group(1).strip() if m else 'Release '+tag,encoding='utf-8')"
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

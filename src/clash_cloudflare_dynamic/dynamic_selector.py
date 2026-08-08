@@ -2770,7 +2770,7 @@ def speed_test(
         payload = json.loads(proc.stdout.strip())
         code = int(payload.get("http_code", 0))
         size = float(payload.get("size_download", 0))
-        speed = float(payload.get("speed_download", 0))
+        connection_average_speed = float(payload.get("speed_download", 0))
         total = float(payload.get("time_total", 0))
         ttfb = float(payload.get("time_starttransfer", 0))
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -2780,6 +2780,11 @@ def speed_test(
             "error": f"测速结果解析失败: {exc}",
         }
     minimum_size = requested_bytes * 0.9
+    payload_seconds = total - ttfb
+    if size > 0 and payload_seconds > 0:
+        speed = size / payload_seconds
+    else:
+        speed = connection_average_speed
     ok = 200 <= code < 400 and size >= minimum_size and speed > 0
     if ok:
         error = ""
@@ -2798,6 +2803,9 @@ def speed_test(
         "http_code": code,
         "speed_Mbps": round(speed * 8 / 1_000_000, 2),
         "speed_MB_per_s": round(speed / 1_000_000, 2),
+        "connection_average_speed_Mbps": round(
+            connection_average_speed * 8 / 1_000_000, 2
+        ),
         "ttfb_ms": round(ttfb * 1000, 2),
         "total_ms": round(total * 1000, 2),
         "size_download": int(size),
@@ -3457,6 +3465,12 @@ def diagnose(api: MihomoAPI, settings: dict[str, Any]) -> int:
     print("正式池节点数：", len(auto.get("all", [])))
     print("发现池节点数：", len(discovery.get("all", [])))
     print("本地代理：", settings["mixed_proxy"])
+    deep_bytes = max(1, int(settings.get("speed_test_bytes", 3_000_000)))
+    deep_timeout = max(1.0, float(settings.get("speed_timeout_seconds", 20)))
+    quick_bytes = min(deep_bytes, max(1, int(settings.get("quick_speed_test_bytes", 3_000_000))))
+    quick_timeout = min(deep_timeout, max(1.0, float(settings.get("quick_speed_timeout_seconds", 20))))
+    print("深扫正式测速：", f"{deep_bytes / 1_000_000:g} MB/次，单次超时 {deep_timeout:g} 秒")
+    print("轻扫正式测速：", f"{quick_bytes / 1_000_000:g} MB/次，单次超时 {quick_timeout:g} 秒")
     print("节点模板：", f"{node_protocol} / TCP {node_port}")
     print("provider SAFE_PATHS：", "正常" if providers_in_safe_paths else "异常")
     print("provider 目录：", PROVIDER_DIR)
@@ -3631,7 +3645,12 @@ def main() -> int:
                 int(settings["speed_candidates"]), 8
             )
             settings["speed_test_bytes"] = min(
-                int(settings["speed_test_bytes"]), 1_000_000
+                int(settings["speed_test_bytes"]),
+                int(settings.get("quick_speed_test_bytes", 3_000_000)),
+            )
+            settings["speed_timeout_seconds"] = min(
+                float(settings["speed_timeout_seconds"]),
+                float(settings.get("quick_speed_timeout_seconds", 20)),
             )
             settings["speed_probe_candidates"] = min(
                 int(settings.get("speed_probe_candidates", 24)), 24
@@ -3642,6 +3661,13 @@ def main() -> int:
             settings["tcp_workers"] = min(
                 int(settings.get("tcp_workers", 64)), 48
             )
+
+        scan_mode = "轻量" if args.quick else "深度"
+        log(
+            f"{scan_mode}正式测速参数："
+            f"{int(settings['speed_test_bytes']) / 1_000_000:g} MB/次，"
+            f"单次超时 {float(settings['speed_timeout_seconds']):g} 秒"
+        )
 
         enter_stage("连接 Mihomo API", "candidate_generation")
         try:

@@ -2,6 +2,30 @@
   "schema_version": 1,
   "markers": [
     {
+      "id": "payload-throughput-excludes-ttfb",
+      "description": "正式吞吐按响应体传输时间计算，避免 TTFB 把短样本速度系统性压低",
+      "file": "dynamic_selector.py",
+      "pattern": "payload_seconds = total - ttfb",
+      "min_count": 1,
+      "added_in": "v1.4.0"
+    },
+    {
+      "id": "quick-speed-byte-limit",
+      "description": "轻扫正式测速有独立的 3 MB 默认上限",
+      "file": "dynamic_selector.py",
+      "pattern": "quick_speed_test_bytes",
+      "min_count": 1,
+      "added_in": "v1.4.0"
+    },
+    {
+      "id": "quick-speed-timeout-limit",
+      "description": "轻扫正式测速有独立的 20 秒默认超时上限",
+      "file": "dynamic_selector.py",
+      "pattern": "quick_speed_timeout_seconds",
+      "min_count": 1,
+      "added_in": "v1.4.0"
+    },
+    {
       "id": "speed-probe-timeout-tolerance",
       "description": "速度粗测对 MihomoConfirmationTimeout 做单节点容错（不因单点超时整体失败）",
       "file": "dynamic_selector.py",

@@ -29,7 +29,7 @@ tools/privacy_check.py         发布前隐私检查
 
 `v1.3.0` 已把 Windows 安装器迁移为 WPF 单页界面：主配置位于左侧，脱敏实时摘要位于右侧，本地 Mihomo 连接设置默认折叠。界面支持“跟随系统 / 浅色 / 深色”，使用系统强调色、轻量设置卡片和响应式布局；窄窗口会收起摘要，表单可独立滚动且底部操作栏保持固定。安装器也针对 Per-Monitor V2 DPI、ClearType 和布局像素对齐做了专门处理。
 
-`v1.3.2` 补齐正式测速公平调度、历史稳定性评分、严格正式池准入和按模式运行心跳；`v1.3.1` 的通知 HTML 数量上限与日志轮转仍然保留。
+`v1.4.0` 候选版把深扫正式测速提高到 20 MB，并将轻扫固定为独立的 3 MB/20 秒上限；吞吐只按响应体传输时间计算，降低 TTFB 和慢启动对短样本的干扰。
 
 ## 版本与下载
 
@@ -37,6 +37,7 @@ tools/privacy_check.py         发布前隐私检查
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
+| `v1.4.0` | 待发布候选版 | 三线路测速口径统一、深扫 20 MB、Release 完整门禁 | 本地构建验证中 |
 | `v1.3.7` | 最新稳定版 | 修复 ranges cache 和 JSON 临时文件原子写入 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.7) |
 | `v1.3.6` | 历史稳定版 | 修复切换间隔边界条件（90秒宽限期） | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.6) |
 | `v1.3.5` | 历史稳定版 | 深扫连续跳过8h后强制执行 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.5) |
@@ -89,11 +90,20 @@ tools/privacy_check.py         发布前隐私检查
 
 provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALAPPDATA%`。
 
+## 默认测速规模
+
+- 深度扫描：基础最多 20 个正式候选，每个候选交错测试 3 次，每次 20 MB、单次超时 60 秒；当前节点未入选时会额外追加，正式测速理论上限约 1.26 GB/轮；
+- 轻量扫描：基础最多 8 个正式候选，每次 3 MB、单次超时 20 秒；当前节点未入选时会额外追加，正式测速理论上限约 81 MB/轮；
+- `quick_speed_test_bytes` 与 `quick_speed_timeout_seconds` 独立于深扫参数，调整深扫不会再意外放大半小时轻扫流量；
+- 速度按下载响应体的实际传输时间计算，同时保留含连接与 TTFB 的全程平均速度用于诊断。
+
+正式测速前仍会发起 128 KB 预热请求，预热值不参与排名。以上均为候选满额时的理论上限，实际流量通常更低。
+
 ## Release 一键安装
 
 普通用户推荐使用图形向导：
 
-1. 从 [v1.3.4 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.4) 下载 `ClashCloudflareDynamic.zip`；
+1. 从 [最新稳定版 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/latest) 下载 `ClashCloudflareDynamic.zip`；
 2. 完整解压 ZIP，不要直接在压缩包预览窗口中运行；
 3. 双击根目录的 `Install.cmd`；
 4. 选择 VMess、VLESS、Trojan 或自定义 Mihomo 模板，填写端口、API 和节点参数；
