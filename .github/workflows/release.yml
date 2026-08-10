@@ -44,6 +44,7 @@ jobs:
           python -m py_compile `
             src/clash_cloudflare_dynamic/__init__.py `
             src/clash_cloudflare_dynamic/dynamic_selector.py `
+            src/clash_cloudflare_dynamic/v2rayn_mode.py `
             src/clash_cloudflare_dynamic/health_monitor_launcher.py `
             src/clash_cloudflare_dynamic/storage_maintenance.py `
             tools/build_release.py `
@@ -92,13 +93,25 @@ jobs:
           }
           if ($failed) { exit 1 }
 
-      - name: Run Windows installer isolation tests
+      - name: Run setup isolation tests
         shell: powershell
-        run: |
-          ./tests/windows/test_setup.ps1
-          ./tests/windows/test_install_wizard.ps1
-          ./tests/windows/test_install_hybrid.ps1
-          ./tests/windows/test_uninstall.ps1
+        run: ./tests/windows/test_setup.ps1
+
+      - name: Run install wizard isolation tests
+        shell: powershell
+        run: ./tests/windows/test_install_wizard.ps1
+
+      - name: Run installer isolation tests
+        shell: powershell
+        run: ./tests/windows/test_install_hybrid.ps1
+
+      - name: Run v2rayN installer isolation tests
+        shell: powershell
+        run: ./tests/windows/test_install_v2rayn.ps1
+
+      - name: Run uninstaller isolation tests
+        shell: powershell
+        run: ./tests/windows/test_uninstall.ps1
 
       - name: Remove generated caches
         shell: pwsh

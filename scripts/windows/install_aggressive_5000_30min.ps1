@@ -30,8 +30,10 @@ function New-CompatibleTaskSettings {
 $InstallDir = Join-Path $env:LOCALAPPDATA "ClashCloudflareDynamic"
 $Script = Join-Path $InstallDir "dynamic_selector.py"
 $OldTask = "Clash Cloudflare Dynamic Discovery 30min"
-$LightTask = "Clash Cloudflare Light Scan 30min"
-$DeepTask = "Clash Cloudflare Deep Scan 5000 6h"
+$LightTask = "Clash Cloudflare Light Scan 2h"
+$DeepTask = "Clash Cloudflare Deep Scan 5000 12h"
+$LegacyLightTask = "Clash Cloudflare Light Scan 30min"
+$LegacyDeepTask = "Clash Cloudflare Deep Scan 5000 6h"
 $HealthTask = "Clash Cloudflare Health Monitor 30min"
 $AggressiveTask = "Clash Cloudflare Deep Scan 5000 30min"
 
@@ -94,6 +96,8 @@ try {
         @{ TaskName = $OldTask; Name = "old-task.xml" },
         @{ TaskName = $LightTask; Name = "light-task.xml" },
         @{ TaskName = $DeepTask; Name = "deep-task.xml" },
+        @{ TaskName = $LegacyLightTask; Name = "legacy-light-task.xml" },
+        @{ TaskName = $LegacyDeepTask; Name = "legacy-deep-task.xml" },
         @{ TaskName = $HealthTask; Name = "health-task.xml" },
         @{ TaskName = $AggressiveTask; Name = "aggressive-task.xml" }
     ) | ForEach-Object {
@@ -131,7 +135,7 @@ try {
         -Force `
         -ErrorAction Stop | Out-Null
 
-    foreach ($TaskName in @($OldTask, $LightTask, $DeepTask)) {
+    foreach ($TaskName in @($OldTask, $LightTask, $DeepTask, $LegacyLightTask, $LegacyDeepTask)) {
         if ($ExistingTaskNames -notcontains $TaskName) {
             continue
         }
@@ -150,7 +154,7 @@ try {
         Get-ScheduledTask -ErrorAction Stop |
             ForEach-Object { [string]$_.TaskName }
     )
-    foreach ($TaskName in @($OldTask, $LightTask, $DeepTask)) {
+    foreach ($TaskName in @($OldTask, $LightTask, $DeepTask, $LegacyLightTask, $LegacyDeepTask)) {
         if ($RemainingTaskNames -contains $TaskName) {
             throw "混合模式任务删除后仍然存在：$TaskName"
         }
@@ -162,6 +166,8 @@ try {
         @{ TaskName = $OldTask; Name = "old-task.xml" },
         @{ TaskName = $LightTask; Name = "light-task.xml" },
         @{ TaskName = $DeepTask; Name = "deep-task.xml" },
+        @{ TaskName = $LegacyLightTask; Name = "legacy-light-task.xml" },
+        @{ TaskName = $LegacyDeepTask; Name = "legacy-deep-task.xml" },
         @{ TaskName = $AggressiveTask; Name = "aggressive-task.xml" }
     )) {
         $TaskName = $TaskSpec.TaskName

@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/YanYunCY/ClashCloudflareDynamic/actions/workflows/ci.yml/badge.svg)](https://github.com/YanYunCY/ClashCloudflareDynamic/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/YanYunCY/ClashCloudflareDynamic)](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/latest) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/YanYunCY/ClashCloudflareDynamic/blob/main/LICENSE)
 
-> **TL;DR (English):** A Windows tool that automatically discovers fast Cloudflare Anycast (preferred) IPs and drives Mihomo / Clash Verge Rev to switch to the best node on its own. It validates candidates over your real proxy link with three rounds of latency and download speed tests, runs unattended via a Windows Scheduled Task, and ships with a graphical installer. Documentation below is written in Chinese.
+> **TL;DR (English):** A Windows tool that discovers fast Cloudflare Anycast IPs and automatically updates either Mihomo / Clash Verge Rev or v2rayN / Xray. It validates candidates over the user's real proxy protocol with three rounds of response and download tests, runs through Windows Scheduled Tasks, and ships with a backend-selectable installer. Documentation below is written in Chinese.
 
-Windows 上的 Cloudflare Anycast 地址动态发现与 Mihomo/Clash Verge Rev 自动优选工具。
+Windows 上的 Cloudflare Anycast 地址动态发现与 Mihomo/Clash Verge Rev、v2rayN/Xray 自动优选工具。
 
-它从 Cloudflare 官方 IPv4 网段抽样候选，先按用户选择的节点端口做 TCP 初筛，再通过用户自己的 Mihomo 节点模板验证真实协议、TLS 和传输链路，执行多轮延迟与下载测速，并在防抖条件满足后更新 provider 和切换节点。
+它从 Cloudflare 官方 IPv4 网段抽样候选，先按用户节点端口做 TCP 初筛，再通过用户自己的节点模板验证真实协议、TLS 和传输链路，执行多轮响应与下载测速，并在防抖条件满足后更新 Mihomo provider 或 v2rayN 原生活动槽。
 
 > 本项目不提供代理服务、节点账号或认证信息。请仅使用你拥有或获授权使用的节点、域名和凭据。
 
@@ -29,7 +29,7 @@ tools/privacy_check.py         发布前隐私检查
 
 `v1.3.0` 已把 Windows 安装器迁移为 WPF 单页界面：主配置位于左侧，脱敏实时摘要位于右侧，本地 Mihomo 连接设置默认折叠。界面支持“跟随系统 / 浅色 / 深色”，使用系统强调色、轻量设置卡片和响应式布局；窄窗口会收起摘要，表单可独立滚动且底部操作栏保持固定。安装器也针对 Per-Monitor V2 DPI、ClearType 和布局像素对齐做了专门处理。
 
-`v1.4.0` 候选版把深扫正式测速提高到 20 MB，并将轻扫固定为独立的 3 MB/20 秒上限；吞吐只按响应体传输时间计算，降低 TTFB 和慢启动对短样本的干扰；扫描结束后会恢复测速域名出口，独立测速出口还可直接跟随自动组，不再让手工测速误用最后一个临时候选。
+`v1.5.0` 新增 v2rayN/Xray 后端。双击 `Install.cmd` 可选择 Clash/Mihomo 或 v2rayN/Xray；后者使用 v2rayN 自带 Xray 做真实 VMess/WS/TLS 验证，通过 SQLite 活动槽和 v2rayN 自身 Reload 热切换，不结束桌面主进程。公开配置默认不启用 SG、VLESS 或 HY2，也不包含任何节点凭据。
 
 ## 版本与下载
 
@@ -37,8 +37,9 @@ tools/privacy_check.py         发布前隐私检查
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
-| `v1.4.0` | 待发布候选版 | 测速口径统一、深扫 20 MB、测速出口恢复、Release 完整门禁 | 本地构建验证中 |
-| `v1.3.7` | 最新稳定版 | 修复 ranges cache 和 JSON 临时文件原子写入 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.7) |
+| `v1.5.0` | 最新稳定版 | 安装时可选择 Clash/Mihomo 或 v2rayN/Xray 后端 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.5.0) |
+| `v1.4.0` | 历史稳定版 | 测速口径统一、深扫 20 MB、测速出口恢复、Release 完整门禁 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.4.0) |
+| `v1.3.7` | 历史稳定版 | 修复 ranges cache 和 JSON 临时文件原子写入 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.7) |
 | `v1.3.6` | 历史稳定版 | 修复切换间隔边界条件（90秒宽限期） | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.6) |
 | `v1.3.5` | 历史稳定版 | 深扫连续跳过8h后强制执行 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.5) |
 | `v1.3.4` | 历史稳定版 | 三方同步对账、保留期30天+VACUUM、UTF-8输出、隐私检查反转 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.4) |
@@ -56,12 +57,14 @@ tools/privacy_check.py         发布前隐私检查
 
 ## 主要功能
 
-- 每 30 分钟轻量扫描，默认最多发现 200 个新地址；
-- 每 6 小时深度扫描约 5000 个新地址；
+- 每 2 小时轻量扫描，默认最多发现 200 个新地址；
+- 每 12 小时深度扫描约 5000 个新地址，深扫运行期间轻扫自动跳过；
 - SQLite 避免短期重复抽样，并自动维护历史；
 - 真实代理链路验证，不以裸 IP 的 HTTP 测速代替节点验证；
 - VMess、VLESS、Trojan 示例和自定义 Mihomo 节点模板；
-- Release 内置可双击的 Windows 图形安装向导；
+- Release 安装入口可选择 Clash/Mihomo 图形向导或 v2rayN/Xray 安装器；
+- v2rayN 模式使用临时 Xray 进程并行验证候选，不让候选测速占用活动代理端口；
+- v2rayN TUN 开启时，TCP 初筛绑定 Windows 物理默认接口，避免扫描流量回灌当前代理；
 - TCP 初筛自动跟随节点模板端口，不再写死为 443；
 - 发现、粗测、正式测速 CSV、决策 JSON 和通知报告记录协议与端口；
 - 每个最终候选连续测试 3 次，记录原始值、平均值、标准差和 CV；
@@ -76,15 +79,19 @@ tools/privacy_check.py         发布前隐私检查
 
 - Windows 10/11；
 - Python 3.10 或更高版本，并包含同目录的 `pythonw.exe`；
-- Clash Verge Rev；
-- Mihomo REST API 可从本机访问；
 - `curl.exe`；
-- 一个你有权使用的代理节点模板。模板必须包含 Mihomo 节点所需认证、`port` 和传输参数，程序只替换 `name` 与 `server`，其余字段原样保留。Mihomo 的 `type`、`server` 和 `port` 是代理节点通用字段，具体协议字段以 [Mihomo 官方文档](https://wiki.metacubex.one/en/config/proxies/) 为准。
+- 任选一个客户端后端：Clash Verge Rev + 可从本机访问的 Mihomo REST API，或已安装并至少启动过一次的 v2rayN；
+- 一个你有权使用的代理节点模板。程序只替换候选节点的显示名和 Cloudflare 入口 IP，其余认证、端口、SNI 和传输参数保持不变。
+
+Clash/Mihomo 模式支持 VMess、VLESS、Trojan 和自定义 Mihomo 节点模板，具体字段以 [Mihomo 官方文档](https://wiki.metacubex.one/en/config/proxies/) 为准。
+
+v2rayN/Xray 模式要求 v2rayN 根目录包含 `v2rayN.exe`、`guiConfigs/guiNDB.db`、`guiConfigs/guiNConfig.json` 和 `bin/xray/xray.exe`。当前实现按 v2rayN 7.24.x 的 SQLite 结构开发和测试；安装器不会下载或替换 v2rayN。公开安装只创建基础 VMess + WebSocket + TLS 模板，SG、VLESS 和 HY2 需要用户自己已有的本地模板或配置并显式启用。
 
 默认地址：
 
 - Mihomo API：`http://127.0.0.1:9090`
 - mixed proxy：`http://127.0.0.1:7890`
+- v2rayN 本地 HTTP 代理：默认 `http://127.0.0.1:10808`，安装时可修改；
 - 安装目录：`%LOCALAPPDATA%\ClashCloudflareDynamic`
 - provider：`%APPDATA%\io.github.clash-verge-rev.clash-verge-rev\providers\ClashCloudflareDynamic`
 
@@ -102,13 +109,14 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 
 ## Release 一键安装
 
-普通用户推荐使用图形向导：
+普通用户使用统一入口：
 
 1. 从 [最新稳定版 Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/latest) 下载 `ClashCloudflareDynamic.zip`；
 2. 完整解压 ZIP，不要直接在压缩包预览窗口中运行；
 3. 双击根目录的 `Install.cmd`；
-4. 选择 VMess、VLESS、Trojan 或自定义 Mihomo 模板，填写端口、API 和节点参数；
-5. 按下方“Clash Verge Rev 中的必要设置”启用外部控制，然后导入向导显示的 YAML，并选择 `节点选择 → 自动选择`。
+4. 选择 `Clash Verge Rev / Mihomo` 或 `v2rayN / Xray`；
+5. Clash 模式在图形向导中选择协议并填写 API 与节点参数；v2rayN 模式填写基础 VMess/WS/TLS 参数和本地 HTTP 代理地址；
+6. 按对应后端章节完成客户端内的一次性选择。
 
 向导不会下载或执行网络上的安装脚本。UUID、密码和 API secret 使用掩码输入，只写入受控临时目录和本机安装目录；临时配置在安装成功或失败后都会清理，不会留在 Release 解压目录。
 
@@ -118,7 +126,7 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 - 选择“重新填写节点参数”：安装器先事务备份，再替换设置、重建 Clash YAML，并用原 IP 列表重建 provider；
 - 选择“取消”：不修改安装。
 
-这是引导式一键安装，仍要求本机已安装 Python 3.10+、`pythonw.exe` 和 Clash Verge Rev。项目尚未使用代码签名证书，因此 Windows 可能显示未知发布者提示；请只从本仓库 Release 下载，并核对 Release 中公布的 SHA-256。
+这是引导式一键安装，仍要求本机已安装 Python 3.10+、`pythonw.exe` 和所选客户端。项目尚未使用代码签名证书，因此 Windows 可能显示未知发布者提示；请只从本仓库 Release 下载，并核对 Release 中公布的 SHA-256。
 
 ## Clash Verge Rev 中的必要设置
 
@@ -141,7 +149,40 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 
 外部控制只需要允许本机访问。不要为了排查连接问题关闭密钥、监听所有网卡或把控制端口暴露到局域网/公网；如果诊断显示连接被拒绝，优先检查“外部控制”开关、端口以及 Mihomo 内核是否已经重新加载。
 
-## 手动安装（高级用户与开发者）
+## v2rayN/Xray 模式
+
+v2rayN 安装器只生成本机工具配置和计划任务，不安装客户端，也不把公开示例直接写进 v2rayN 数据库。首次安装后：
+
+1. 保持 v2rayN 正常运行，确认系统代理或 TUN 至少启用一个；
+2. 运行 `python "%LOCALAPPDATA%\ClashCloudflareDynamic\dynamic_selector.py" --setup-v2rayn-auto`，创建相互隔离的 `AUTO-LA` 与 `AUTO-SG` 原生活动槽；
+3. 在 v2rayN 中把 `AUTO-LA` 设为活动节点。公开默认配置只会在 LA VMess 优选节点中更新；只有用户自行提供并启用本地配置后，VLESS 或 HY2 才会进入该组；
+4. 仅在自行配置 SG 模板后使用 `AUTO-SG`。该组只允许 SG VMess，不会跨组切到 LA 或 HY2；
+5. 运行 `python "%LOCALAPPDATA%\ClashCloudflareDynamic\dynamic_selector.py" --diagnose`，确认 v2rayN、Xray、活动槽、系统代理/TUN 和路由状态。
+
+自动切换会事务备份 `guiNDB.db`，把胜出配置复制到当前 AUTO 槽，再调用 v2rayN 自身的 Reload 控件热重载子核心；不会退出或强制结束 v2rayN 桌面进程。若当前节点不是 AUTO 槽，程序只更新节点库并拒绝旧式重启切换。
+
+扫描期间每个候选由独立临时 Xray 监听验证，不经过 Mihomo，也不复用 v2rayN 的活动代理端口。TUN 开启时，TCP 初筛仅把扫描 socket 绑定到 Windows 物理默认接口，普通应用路由不变。报告中的“冷启动代理响应”是每次新建完整代理链路并访问测试 URL 的响应时间，包含协议握手、目标 TLS 和首个响应，不等同于 v2rayN GUI 显示的入口 RTT。
+
+v2rayN 模式会写入一套国内直连、国外代理、私网直连和广告拦截的 Xray 路由。它不替用户修改浏览器 WebRTC 策略；有严格防泄漏要求时仍需在浏览器或企业策略层禁用非代理 UDP，并自行验证实际 DNS/WebRTC 行为。
+
+只生成配置、不安装任务时，可使用隔离模式：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\install_v2rayn.ps1 `
+  -NonInteractive -PrepareOnly `
+  -V2rayNRoot "C:\path\to\v2rayN" `
+  -Uuid "your-vmess-uuid" `
+  -ServerName "your-domain" -HostName "your-domain" `
+  -PreparedConfigurationDirectory "$env:TEMP\ccd-v2rayn-config"
+```
+
+`--v2rayn-dry-run` 会执行候选发现、真实 Xray 响应和三轮下载测速，但不写 v2rayN 数据库、不更新 AUTO 槽，也不切换系统代理：
+
+```powershell
+python "$env:LOCALAPPDATA\ClashCloudflareDynamic\dynamic_selector.py" --quick --v2rayn-dry-run
+```
+
+## Clash/Mihomo 手动安装（高级用户与开发者）
 
 开发者从源码安装时，以下命令均在仓库根目录运行；部署包用户则去掉路径中的 `scripts\windows\`。
 
@@ -200,7 +241,7 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 
 ## 配置安全
 
-`settings.json`、`node_template.json`、生成的 Clash YAML、provider、日志、数据库和通知报告均已列入 `.gitignore`。不要使用 `git add -f` 强制提交它们。
+`settings.json`、`node_template.json`、生成的 Clash YAML、provider、日志、v2rayN SQLite 备份、运行状态和通知报告均已列入 `.gitignore`。不要使用 `git add -f` 强制提交它们。
 
 公开的 `config.template.yaml` 不包含 SNI、Host、UUID 或节点密码。SNI/Host 只来自当前用户在安装向导中填写的域名，并写入该用户本机的 `node_template.json` 和 provider；这是 Mihomo 通过 Cloudflare IP 定向到用户自己节点域名所必需的数据，不会上传到 GitHub。公开的三个节点示例统一使用 `replace-with-your-domain.example`，不能直接安装或连接。
 
@@ -231,7 +272,7 @@ git status --ignored --short
 
 ## 通知与 HTML 报告中的阶段漏斗
 
-Windows 通知和点击后打开的 HTML 报告按“候选 → TCP 可达 → 真实代理链路 → 速度粗测 → 正式三轮测速”展示本轮漏斗。相邻阶段的数量差不能一律理解为失败：发现池、速度粗测池和正式测速池都有数量上限，候选可能已经通过前一阶段，只是因当轮配额、排序或抽样策略未进入下一阶段；这种情况属于“未入选”，不是链路或测速失败。
+Windows 通知和点击后打开的 HTML 报告按“候选 → TCP 可达 → 真实代理链路 → 速度粗测 → 正式三轮测速”展示本轮漏斗。v2rayN 模式对应显示“TCP 物理直连初筛”和“真实协议冷启动响应”。相邻阶段的数量差不能一律理解为失败：发现池、速度粗测池和正式测速池都有数量上限，候选可能已经通过前一阶段，只是因当轮配额、排序或抽样策略未进入下一阶段；这种情况属于“未入选”，不是链路或测速失败。
 
 - `各阶段失败 IP` 是本轮各验证阶段确认失败的 IP 总数，例如 TCP 不可达、真实代理链路失败、速度粗测失败或正式三轮测速失败；不包含仅因配额未入选的候选。
 - `名额未入选` 使用各阶段实际选择名单计算；极少数已被选择但因无效节点名等内部原因没有执行测试的项，会单列为 `已选未执行`，不会被误算成配额未入选。
@@ -243,9 +284,15 @@ Windows 通知和点击后打开的 HTML 报告按“候选 → TCP 可达 → �
 
 ## 后台任务
 
-- `Clash Cloudflare Light Scan 30min`
-- `Clash Cloudflare Deep Scan 5000 6h`
+- `Clash Cloudflare Light Scan 2h`
+- `Clash Cloudflare Deep Scan 5000 12h`
 - `Clash Cloudflare Health Monitor 30min`
+
+选择 v2rayN 后端时，安装器改为创建以下互斥任务，并停用冲突的 Clash 扫描任务：
+
+- `v2rayN Cloudflare Light Scan 2h`
+- `v2rayN Cloudflare Deep Scan 5000 12h`
+- `v2rayN Cloudflare Health Monitor 30min`
 
 扫描和健康监控均使用 `pythonw.exe`。健康监控启动器通过 `CREATE_NO_WINDOW` 调用 PowerShell，因此不会弹出空命令行窗口。轻量和深度扫描分别写入 `logs/last_run_light.json` 与 `logs/last_run_deep.json`，区分 `success`、`skipped`、`failed`；健康监控只把有效成功心跳记为最近成功，并检查正式测速通过数和正式池大小。
 
@@ -299,6 +346,7 @@ python -W error::ResourceWarning -m unittest discover -s .\tests\python -p "test
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_setup.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_install_wizard.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_install_hybrid.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_install_v2rayn.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\windows\test_uninstall.ps1
 ```
 

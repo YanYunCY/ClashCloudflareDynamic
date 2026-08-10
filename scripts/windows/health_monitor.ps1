@@ -306,8 +306,36 @@ function Get-HealthTaskSnapshots([object[]]$Definitions) {
 
 function Get-HealthTaskConfiguration {
     $AggressiveTaskName = "Clash Cloudflare Deep Scan 5000 30min"
-    $LightTaskName = "Clash Cloudflare Light Scan 30min"
-    $DeepTaskName = "Clash Cloudflare Deep Scan 5000 6h"
+    $LightTaskName = "Clash Cloudflare Light Scan 2h"
+    $DeepTaskName = "Clash Cloudflare Deep Scan 5000 12h"
+    $V2rayNLightTaskName = "v2rayN Cloudflare Light Scan 2h"
+    $V2rayNDeepTaskName = "v2rayN Cloudflare Deep Scan 5000 12h"
+    $V2rayNLightExists = $null -ne (
+        Get-ScheduledTask -TaskName $V2rayNLightTaskName -ErrorAction SilentlyContinue
+    )
+    $V2rayNDeepExists = $null -ne (
+        Get-ScheduledTask -TaskName $V2rayNDeepTaskName -ErrorAction SilentlyContinue
+    )
+    if ($V2rayNLightExists -or $V2rayNDeepExists) {
+        return [PSCustomObject]@{
+            ActiveMode = "v2rayn"
+            ModeConflict = $false
+            Definitions = @(
+                [PSCustomObject]@{
+                    Mode = "light"
+                    Label = "v2rayN 轻量扫描"
+                    TaskName = $V2rayNLightTaskName
+                    MaxAge = [TimeSpan]::FromHours(5)
+                },
+                [PSCustomObject]@{
+                    Mode = "deep"
+                    Label = "v2rayN 深度扫描"
+                    TaskName = $V2rayNDeepTaskName
+                    MaxAge = [TimeSpan]::FromHours(26)
+                }
+            )
+        }
+    }
     $AggressiveExists = $null -ne (
         Get-ScheduledTask -TaskName $AggressiveTaskName -ErrorAction SilentlyContinue
     )
@@ -337,13 +365,13 @@ function Get-HealthTaskConfiguration {
                 Mode = "light"
                 Label = "轻量扫描"
                 TaskName = $LightTaskName
-                MaxAge = [TimeSpan]::FromMinutes(90)
+                MaxAge = [TimeSpan]::FromHours(5)
             },
             [PSCustomObject]@{
                 Mode = "deep"
                 Label = "深度扫描"
                 TaskName = $DeepTaskName
-                MaxAge = [TimeSpan]::FromHours(8)
+                MaxAge = [TimeSpan]::FromHours(26)
             }
         )
     }

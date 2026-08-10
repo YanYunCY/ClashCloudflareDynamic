@@ -9,10 +9,21 @@ $ProviderDir = Join-Path $env:APPDATA "io.github.clash-verge-rev.clash-verge-rev
 $ShortcutPath = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Clash Cloudflare Dynamic.lnk"
 $Tasks = @(
     "Clash Cloudflare Dynamic Discovery 30min",
+    "Clash Cloudflare Light Scan 2h",
+    "Clash Cloudflare Deep Scan 5000 12h",
+    "Clash Cloudflare Serial Light Scan 30min",
+    "Clash Cloudflare Serial Deep Scan 5000 6h",
     "Clash Cloudflare Light Scan 30min",
     "Clash Cloudflare Deep Scan 5000 6h",
     "Clash Cloudflare Health Monitor 30min",
     "Clash Cloudflare Deep Scan 5000 30min"
+    ,"Clash Cloudflare SG Light Scan 30min"
+    ,"Clash Cloudflare SG Deep Scan 5000 6h"
+    ,"v2rayN Cloudflare Light Scan 2h"
+    ,"v2rayN Cloudflare Deep Scan 5000 12h"
+    ,"v2rayN Cloudflare Health Monitor 30min"
+    ,"v2rayN Cloudflare Light Scan 30min"
+    ,"v2rayN Cloudflare Deep Scan 5000 6h"
 )
 $ScheduledTasks = @(Get-ScheduledTask -ErrorAction Stop)
 $ScheduledTaskNames = @(

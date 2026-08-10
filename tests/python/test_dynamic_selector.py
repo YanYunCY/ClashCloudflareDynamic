@@ -39,6 +39,29 @@ class StageTimerTests(unittest.TestCase):
         self.assertEqual(durations["tcp_probe"], 3.3)
 
 
+class DeepScanMarkerTests(unittest.TestCase):
+    def test_deep_marker_blocks_light_scan_while_owner_is_alive(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            marker = Path(temp_dir) / "deep_scan.active"
+            with mock.patch.object(selector, "DEEP_ACTIVE_MARKER_PATH", marker):
+                self.assertTrue(selector.try_acquire_deep_marker())
+                self.assertTrue(selector.deep_marker_is_active())
+                selector.release_deep_marker()
+                self.assertFalse(marker.exists())
+
+    def test_stale_marker_is_replaced(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            marker = Path(temp_dir) / "deep_scan.active"
+            marker.write_text(
+                json.dumps({"pid": 99999999, "started": time.time()}),
+                encoding="utf-8",
+            )
+            with mock.patch.object(selector, "DEEP_ACTIVE_MARKER_PATH", marker):
+                self.assertTrue(selector.try_acquire_deep_marker())
+                selector.release_deep_marker()
+            self.assertFalse(marker.exists())
+
+
 class RunStatusTests(unittest.TestCase):
     def test_success_heartbeat_is_per_mode_atomic_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:

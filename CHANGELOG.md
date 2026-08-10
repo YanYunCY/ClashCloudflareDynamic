@@ -2,6 +2,17 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.5.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.5.0) — 2026-08-10
+
+- `Install.cmd` 新增后端选择，可安装原有 Clash Verge Rev/Mihomo 模式或新的 v2rayN/Xray 模式；
+- 新增 v2rayN 原生后端：使用客户端自带 Xray 独立验证 VMess/WS/TLS 候选，通过相互隔离的 `AUTO-LA`、`AUTO-SG` SQLite 活动槽和 v2rayN Reload 热切换，不结束桌面主进程；
+- v2rayN 开启 TUN 时，TCP 初筛 socket 绑定 Windows 物理默认接口，避免候选探测回灌当前代理；正式测速使用统一字节预算的并发流，并保留三次原始速度、平均值、标准差与 CV；
+- v2rayN HTML 报告新增“TCP 物理直连”“真实协议有效”“冷启动代理响应”和并发负载字段，明确该响应值不是 GUI 入口 RTT；
+- 公开 v2rayN 配置默认只启用基础 LA VMess，SG、VLESS、HY2 均默认关闭且不包含维护者节点、数据库、日志或凭据；HY2 核心只在显式启用比较时才要求存在；
+- 修复 v2rayN 自定义本地代理端口的失败回滚验证、切换成功时间提前写入和失败通知误标为 Clash；安装器补齐交互参数与历史冲突任务迁移；
+- 新增 v2rayN `PrepareOnly` 安装隔离测试和 Python 回归测试，并把新核心、安装器、PowerShell BOM/语法、隐私检查与可复现 ZIP 纳入 CI 和 Release 门禁；
+- 推荐后台周期调整为每 2 小时轻扫、每 12 小时深扫；深扫活动期间轻扫自动跳过，健康监控阈值同步调整。
+
 ## [v1.4.0](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.4.0) — 2026-08-08
 
 - 正式下载吞吐改为按响应体传输时间计算，排除 TTFB 对短样本的系统性压低，同时保留含连接阶段的全程平均速度供诊断；

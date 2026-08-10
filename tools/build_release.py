@@ -16,6 +16,7 @@ PACKAGE_NAME = "ClashCloudflareDynamic"
 
 CORE_FILES = (
     "dynamic_selector.py",
+    "v2rayn_mode.py",
     "health_monitor_launcher.py",
     "storage_maintenance.py",
 )
@@ -27,6 +28,7 @@ WINDOWS_FILES = (
     "health_monitor.ps1",
     "install_aggressive_5000_30min.ps1",
     "install_hybrid_5000.ps1",
+    "install_v2rayn.ps1",
     "install_wizard.ps1",
     "install_wizard_ui.ps1",
     "light_scan_200.bat",

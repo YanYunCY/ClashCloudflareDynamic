@@ -33,6 +33,7 @@ import shutil
 import socket
 import sqlite3
 import statistics
+import struct
 import subprocess
 import sys
 import tempfile
@@ -87,7 +88,16 @@ LIGHT_RUN_STATUS_PATH = LOG_DIR / "last_run_light.json"
 DEEP_RUN_STATUS_PATH = LOG_DIR / "last_run_deep.json"
 BEST_IPS_PATH = LOG_DIR / "best_ips.txt"
 HISTORY_PATH = LOG_DIR / "history.csv"
-RUN_LOCK_PATH = ROOT / "dynamic_selector.lock"
+COORDINATION_ROOT = (
+    Path(os.environ["LOCALAPPDATA"]) / "ClashCloudflareDynamic"
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA")
+    else ROOT
+)
+# Share one bandwidth-scan lock across every installed profile and project
+# copy. Per-directory locks allowed concurrent scans to saturate one egress.
+RUN_LOCK_PATH = COORDINATION_ROOT / "dynamic_selector.global.lock"
+DEEP_ACTIVE_MARKER_PATH = COORDINATION_ROOT / "deep_scan.active"
+DEEP_MARKER_MAX_AGE_SECONDS = 3 * 60 * 60
 DISCOVERY_DB_PATH = ROOT / "discovery_history.sqlite3"
 NOTIFY_SCRIPT_PATH = (
     REPOSITORY_ROOT / "scripts" / "windows" / "notify_windows.ps1"
@@ -116,6 +126,12 @@ STAGE_LABELS = {
     "formal_speed": "正式测速",
     "active_provider": "正式池更新",
     "decision": "决策",
+}
+
+V2RAYN_STAGE_LABELS = {
+    **STAGE_LABELS,
+    "tcp_probe": "TCP 物理直连初筛",
+    "proxy_delay": "真实协议冷启动响应",
 }
 
 FALLBACK_RANGES = [
@@ -760,13 +776,19 @@ def create_notification_report(
     report_path = NOTIFICATION_REPORT_DIR / filename
     temp_path = report_path.with_suffix(report_path.suffix + ".tmp")
 
-    current_ip = str(decision.get("current_ip_before") or "未知")
+    is_v2rayn = summary.get("client_mode") == "v2rayn"
+    current_ip = str(
+        decision.get("current_name_before")
+        or decision.get("current_ip_before")
+        or "未知"
+    )
     best = decision.get("best") if isinstance(decision.get("best"), dict) else {}
     current_metrics = decision.get("current_metrics")
     if not isinstance(current_metrics, dict):
         current_metrics = best if best.get("ip") == current_ip else {}
     after_ip = str(
-        decision.get("current_ip_after")
+        decision.get("current_name_after")
+        or decision.get("current_ip_after")
         or (best.get("ip") if decision.get("switched") else current_ip)
         or "未知"
     )
@@ -775,53 +797,78 @@ def create_notification_report(
     counts = normalize_scan_summary_counts(summary)
     detailed_summary = has_detailed_scan_summary(summary)
     display_summary = {**summary, **counts}
-    summary_labels = (
-        [
-            ("协议", "node_protocol"),
-            ("端口", "node_port"),
-            ("候选", "candidate_count"),
-            ("TCP 可达", "tcp_reachable_count"),
-            ("发现池", "discovery_pool_count"),
-            ("发现池新 IP", "discovery_new_count"),
-            ("链路有效", "proxy_valid_count"),
+    if is_v2rayn:
+        summary_labels = [
+            ("自动分组", "auto_mode"),
+            ("总候选", "candidate_count"),
+            ("固定/历史", "fixed_candidate_count"),
+            ("邻近探索", "neighbor_candidate_count"),
+            ("新随机", "random_new_count"),
+            ("复用随机", "random_reused_count"),
+            ("TCP 物理直连可达", "tcp_reachable_count"),
+            ("进入协议验证", "discovery_pool_count"),
+            ("真实协议有效", "proxy_valid_count"),
             ("粗测入选", "speed_probe_selected_count"),
             ("粗测通过", "speed_probe_passed_count"),
-            ("粗测尝试", "speed_probe_attempted_count"),
             ("正式入选", "formal_selected_count"),
             ("正式通过", "formal_passed_count"),
-            ("正式尝试", "formal_attempted_count"),
             ("高速组", "fast_group_count"),
             ("超时", "timeout_count_total"),
-            ("正式池", "active_pool_size"),
+            ("当前组 Xray 池", "active_pool_size"),
             ("本轮新入", "new_active_count"),
             ("池大小变化", "pool_size_delta"),
-            ("各阶段失败 IP", "failed_count"),
-            ("前台延后", "deferred_count"),
+            ("各阶段失败", "failed_count"),
         ]
-        if detailed_summary
-        else [
-            ("协议", "node_protocol"),
-            ("端口", "node_port"),
-            ("候选", "candidate_count"),
-            ("TCP 可达", "tcp_reachable_count"),
-            ("发现池", "discovery_pool_count"),
-            ("发现池新 IP", "discovery_new_count"),
-            ("链路有效", "proxy_valid_count"),
-            ("正式通过", "formal_passed_count"),
-            ("正式尝试", "formal_attempted_count"),
-            ("超时", "timeout_count_total"),
-            ("正式池", "active_pool_size"),
-            ("本轮新入", "new_active_count"),
-            ("池大小变化", "pool_size_delta"),
-            ("各阶段失败 IP", "failed_count"),
-            ("前台延后", "deferred_count"),
-        ]
-    )
+    else:
+        summary_labels = (
+            [
+                ("协议", "node_protocol"),
+                ("端口", "node_port"),
+                ("候选", "candidate_count"),
+                ("TCP 可达", "tcp_reachable_count"),
+                ("发现池", "discovery_pool_count"),
+                ("发现池新 IP", "discovery_new_count"),
+                ("链路有效", "proxy_valid_count"),
+                ("粗测入选", "speed_probe_selected_count"),
+                ("粗测通过", "speed_probe_passed_count"),
+                ("粗测尝试", "speed_probe_attempted_count"),
+                ("正式入选", "formal_selected_count"),
+                ("正式通过", "formal_passed_count"),
+                ("正式尝试", "formal_attempted_count"),
+                ("高速组", "fast_group_count"),
+                ("超时", "timeout_count_total"),
+                ("正式池", "active_pool_size"),
+                ("本轮新入", "new_active_count"),
+                ("池大小变化", "pool_size_delta"),
+                ("各阶段失败 IP", "failed_count"),
+                ("前台延后", "deferred_count"),
+            ]
+            if detailed_summary
+            else [
+                ("协议", "node_protocol"),
+                ("端口", "node_port"),
+                ("候选", "candidate_count"),
+                ("TCP 可达", "tcp_reachable_count"),
+                ("发现池", "discovery_pool_count"),
+                ("发现池新 IP", "discovery_new_count"),
+                ("链路有效", "proxy_valid_count"),
+                ("正式通过", "formal_passed_count"),
+                ("正式尝试", "formal_attempted_count"),
+                ("超时", "timeout_count_total"),
+                ("正式池", "active_pool_size"),
+                ("本轮新入", "new_active_count"),
+                ("池大小变化", "pool_size_delta"),
+                ("各阶段失败 IP", "failed_count"),
+                ("前台延后", "deferred_count"),
+            ]
+        )
     summary_html = "".join(
         f"<div class=\"stat\"><dt>{_html_text(label)}</dt>"
         f"<dd>{_html_text(display_summary.get(key, 0))}</dd></div>"
         for label, key in summary_labels
     )
+    tcp_funnel_label = "TCP 物理直连初筛" if is_v2rayn else "TCP 初筛"
+    proxy_funnel_label = "真实协议冷启动响应" if is_v2rayn else "真实代理链路"
     funnel_rows = "".join(
         "<tr>"
         f"<th scope=\"row\">{_html_text(label)}</th>"
@@ -831,7 +878,7 @@ def create_notification_report(
         "</tr>"
         for label, entered, passed, failed, not_attempted, not_selected, note in [
             (
-                "TCP 初筛",
+                tcp_funnel_label,
                 counts["candidate_count"],
                 counts["tcp_reachable_count"],
                 counts["tcp_failed_count"],
@@ -840,7 +887,7 @@ def create_notification_report(
                 "TCP 可达但未进入发现池",
             ),
             (
-                "真实代理链路",
+                proxy_funnel_label,
                 counts["discovery_pool_count"],
                 counts["proxy_valid_count"],
                 counts["proxy_failed_count"],
@@ -891,9 +938,10 @@ def create_notification_report(
     raw_timeout_counts = summary.get("timeout_counts", {})
     if not isinstance(raw_timeout_counts, dict):
         raw_timeout_counts = {}
+    stage_labels = V2RAYN_STAGE_LABELS if is_v2rayn else STAGE_LABELS
     stage_rows = "".join(
         "<tr>"
-        f"<th scope=\"row\">{_html_text(STAGE_LABELS.get(key, key))}</th>"
+        f"<th scope=\"row\">{_html_text(stage_labels.get(key, key))}</th>"
         f"<td>{_html_text(format_stage_duration(value))}</td>"
         f"<td>{_html_text(raw_timeout_counts.get(key, 0))}</td>"
         "</tr>"
@@ -910,6 +958,12 @@ def create_notification_report(
             if isinstance(speed_cv, (int, float))
             else None
         )
+        workload = "-"
+        if row.get("parallel_concurrency") and row.get("parallel_stream_bytes"):
+            workload = (
+                f"{row.get('parallel_concurrency')}×"
+                f"{row.get('parallel_stream_bytes')} bytes/流"
+            )
         ranking_rows.append(
             "<tr>"
             f"<td>{index}</td>"
@@ -922,10 +976,11 @@ def create_notification_report(
             f"<td>{_html_number(row.get('delay_ms'), 0)}</td>"
             f"<td>{_html_text(row.get('delay_samples_ms'))}</td>"
             f"<td>{_html_number(row.get('delay_stddev_ms'))}</td>"
+            f"<td>{_html_text(workload)}</td>"
             "</tr>"
         )
     if not ranking_rows:
-        ranking_rows.append('<tr><td colspan="10" class="empty">无通过候选</td></tr>')
+        ranking_rows.append('<tr><td colspan="11" class="empty">无通过候选</td></tr>')
 
     rejected_rows = []
     for row in failed_rows:
@@ -971,6 +1026,14 @@ def create_notification_report(
 
     reason = decision.get("reason") or "-"
     duration = format_duration(summary.get("duration_seconds"))
+    node_header = "节点/IP" if is_v2rayn else "IP"
+    average_latency_header = (
+        "平均冷启动代理响应 ms" if is_v2rayn else "平均延迟 ms"
+    )
+    samples_latency_header = (
+        "三次冷启动代理响应 ms" if is_v2rayn else "三次延迟 ms"
+    )
+    latency_stddev_header = "响应 σ" if is_v2rayn else "延迟 σ"
     document = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1012,16 +1075,16 @@ def create_notification_report(
     <tbody>{stage_rows}</tbody>
   </table></div>
   <h2>切换前后</h2><div class="table-wrap"><table>
-    <thead><tr><th>状态</th><th>IP</th><th>平均速度</th><th>平均延迟</th></tr></thead>
+    <thead><tr><th>状态</th><th>{_html_text(node_header)}</th><th>平均速度</th><th>{_html_text(average_latency_header)}</th></tr></thead>
     <tbody>{_report_metric_row('切换前', {**current_metrics, 'ip': current_ip})}{_report_metric_row('切换后', {**after_metrics, 'ip': after_ip})}</tbody>
   </table></div>
   <h2>决策原因</h2><div class="reason">{_html_text(reason)}</div>
   <h2>正式测速排名</h2><div class="table-wrap"><table>
-    <thead><tr><th>#</th><th>IP</th><th>高速组</th><th>平均速度 Mbps</th><th>三次速度 Mbps</th><th>速度 σ</th><th>速度 CV</th><th>平均延迟 ms</th><th>三次延迟 ms</th><th>延迟 σ</th></tr></thead>
+    <thead><tr><th>#</th><th>{_html_text(node_header)}</th><th>高速组</th><th>平均速度 Mbps</th><th>三次速度 Mbps</th><th>速度 σ</th><th>速度 CV</th><th>{_html_text(average_latency_header)}</th><th>{_html_text(samples_latency_header)}</th><th>{_html_text(latency_stddev_header)}</th><th>并发负载</th></tr></thead>
     <tbody>{''.join(ranking_rows)}</tbody>
   </table></div>
   <h2>正式三轮测速淘汰（{counts["formal_failed_count"]}）——仅统计已进入正式测速的节点</h2>{formal_status}<div class="table-wrap"><table>
-    <thead><tr><th>IP</th><th>平均延迟 ms</th><th>三次延迟 ms</th><th>延迟 σ</th><th>成功轮次平均速度 Mbps</th><th>三次速度 Mbps</th><th>速度 σ</th><th>速度 CV</th><th>三次 TTFB ms</th><th>成功/执行/计划</th><th>失败轮次</th><th>淘汰原因</th></tr></thead>
+    <thead><tr><th>{_html_text(node_header)}</th><th>{_html_text(average_latency_header)}</th><th>{_html_text(samples_latency_header)}</th><th>{_html_text(latency_stddev_header)}</th><th>成功轮次平均速度 Mbps</th><th>三次速度 Mbps</th><th>速度 σ</th><th>速度 CV</th><th>三次 TTFB ms</th><th>成功/执行/计划</th><th>失败轮次</th><th>淘汰原因</th></tr></thead>
     <tbody>{''.join(rejected_rows)}</tbody>
   </table></div>
 </main></body></html>
@@ -1364,19 +1427,119 @@ def release_run_lock(handle: Any) -> None:
         handle.close()
 
 
+def deep_marker_is_active() -> bool:
+    try:
+        payload = json.loads(DEEP_ACTIVE_MARKER_PATH.read_text(encoding="utf-8"))
+        started = float(payload.get("started", 0))
+        pid = int(payload.get("pid", 0))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        try:
+            return (
+                time.time() - DEEP_ACTIVE_MARKER_PATH.stat().st_mtime
+                <= DEEP_MARKER_MAX_AGE_SECONDS
+            )
+        except OSError:
+            return False
+    if time.time() - started > DEEP_MARKER_MAX_AGE_SECONDS:
+        return False
+    return process_is_alive(pid)
+
+
+def process_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            ctypes.c_ulong,
+            ctypes.c_int,
+            ctypes.c_ulong,
+        ]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetExitCodeProcess.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel32.OpenProcess(
+            process_query_limited_information, False, pid
+        )
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def try_acquire_deep_marker() -> bool:
+    DEEP_ACTIVE_MARKER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        try:
+            fd = os.open(
+                DEEP_ACTIVE_MARKER_PATH,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            )
+        except FileExistsError:
+            if deep_marker_is_active():
+                return False
+            try:
+                DEEP_ACTIVE_MARKER_PATH.unlink()
+            except OSError:
+                return False
+            continue
+        try:
+            os.write(
+                fd,
+                json.dumps({"pid": os.getpid(), "started": time.time()}).encode(
+                    "utf-8"
+                ),
+            )
+        finally:
+            os.close(fd)
+        return True
+    return False
+
+
+def release_deep_marker() -> None:
+    try:
+        payload = json.loads(DEEP_ACTIVE_MARKER_PATH.read_text(encoding="utf-8"))
+        if int(payload.get("pid", -1)) != os.getpid():
+            return
+        DEEP_ACTIVE_MARKER_PATH.unlink()
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+
+
 def load_settings() -> dict[str, Any]:
     value = load_json(SETTINGS_PATH, {})
     if not isinstance(value, dict):
         raise RuntimeError("settings.json 顶层必须是 JSON 对象")
-    required = {
-        "controller",
-        "mixed_proxy",
-        "active_provider_name",
-        "discovery_provider_name",
-        "auto_group",
-        "discovery_group",
-        "parent_group",
-    }
+    client_mode = str(value.get("client_mode", "mihomo")).strip().lower()
+    if client_mode == "v2rayn":
+        required = {"official_ipv4_url", "speed_test_base_url"}
+    else:
+        required = {
+            "controller",
+            "mixed_proxy",
+            "active_provider_name",
+            "discovery_provider_name",
+            "auto_group",
+            "discovery_group",
+            "parent_group",
+        }
     missing = sorted(required.difference(value))
     if missing:
         raise RuntimeError(
@@ -2680,11 +2843,104 @@ def generate_candidates(
     return ordered, fixed, fresh_added, reused_added
 
 
+def recv_exact(sock: socket.socket, size: int) -> bytes:
+    data = bytearray()
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:
+            raise OSError("SOCKS5 代理提前关闭连接")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def socks5_connect(
+    proxy_host: str,
+    proxy_port: int,
+    target_ip: str,
+    target_port: int,
+    timeout: float,
+) -> socket.socket:
+    sock = socket.create_connection((proxy_host, proxy_port), timeout=timeout)
+    try:
+        sock.settimeout(timeout)
+        sock.sendall(b"\x05\x01\x00")
+        if recv_exact(sock, 2) != b"\x05\x00":
+            raise OSError("SOCKS5 代理不支持免认证连接")
+        sock.sendall(
+            b"\x05\x01\x00\x01"
+            + socket.inet_aton(target_ip)
+            + int(target_port).to_bytes(2, "big")
+        )
+        header = recv_exact(sock, 4)
+        if header[0] != 5 or header[1] != 0:
+            raise OSError(f"SOCKS5 CONNECT 失败，代码 {header[1]}")
+        address_type = header[3]
+        if address_type == 1:
+            address_size = 4
+        elif address_type == 4:
+            address_size = 16
+        elif address_type == 3:
+            address_size = recv_exact(sock, 1)[0]
+        else:
+            raise OSError(f"SOCKS5 返回未知地址类型 {address_type}")
+        recv_exact(sock, address_size + 2)
+        return sock
+    except Exception:
+        sock.close()
+        raise
+
+
+def parse_tcp_probe_proxy(settings: dict[str, Any]) -> tuple[str, int] | None:
+    raw = str(settings.get("tcp_probe_socks_proxy", "")).strip()
+    if not raw:
+        return None
+    if raw.startswith("socks5://"):
+        raw = raw[len("socks5://") :]
+    host, separator, port_text = raw.rpartition(":")
+    if not separator or not host:
+        raise RuntimeError("tcp_probe_socks_proxy 必须为 host:port")
+    try:
+        port = int(port_text)
+    except ValueError as exc:
+        raise RuntimeError("tcp_probe_socks_proxy 端口无效") from exc
+    if not 1 <= port <= 65535:
+        raise RuntimeError("tcp_probe_socks_proxy 端口必须在 1-65535")
+    return host, port
+
+
+def _interface_tcp_connect(
+    ip: str,
+    port: int,
+    timeout: float,
+    interface_index: int,
+) -> socket.socket:
+    """Connect through a Windows interface, bypassing a catch-all TUN route."""
+
+    if os.name != "nt":
+        raise RuntimeError("按接口执行 TCP 初筛目前仅支持 Windows")
+    connection = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        connection.settimeout(timeout)
+        option = getattr(socket, "IP_UNICAST_IF", 31)
+        connection.setsockopt(
+            socket.IPPROTO_IP,
+            option,
+            struct.pack("!I", int(interface_index)),
+        )
+        connection.connect((ip, port))
+        return connection
+    except Exception:
+        connection.close()
+        raise
+
+
 def tcp_probe(
     ip: str,
     attempts: int,
     timeout: float,
     port: int,
+    socks_proxy: tuple[str, int] | None = None,
+    outbound_interface_index: int | None = None,
 ) -> dict[str, Any]:
     port = int(port)
     if not 1 <= port <= 65535:
@@ -2694,7 +2950,15 @@ def tcp_probe(
     for _ in range(max(1, attempts)):
         start = time.perf_counter()
         try:
-            with socket.create_connection((ip, port), timeout=timeout):
+            if socks_proxy:
+                connection = socks5_connect(*socks_proxy, ip, port, timeout)
+            elif outbound_interface_index is not None:
+                connection = _interface_tcp_connect(
+                    ip, port, timeout, outbound_interface_index
+                )
+            else:
+                connection = socket.create_connection((ip, port), timeout=timeout)
+            with connection:
                 samples.append((time.perf_counter() - start) * 1000)
         except (socket.timeout, TimeoutError):
             timeout_count += 1
@@ -2714,15 +2978,30 @@ def tcp_probe(
 def tcp_stage(
     ips: list[str],
     settings: dict[str, Any],
-    port: int,
+    port: int = 443,
 ) -> list[dict[str, Any]]:
     workers = int(settings.get("tcp_workers", 64))
     attempts = int(settings.get("tcp_attempts", 1))
     timeout = float(settings.get("tcp_timeout_seconds", 1.6))
+    socks_proxy = parse_tcp_probe_proxy(settings)
+    raw_interface_index = settings.get("tcp_outbound_interface_index")
+    outbound_interface_index = (
+        None if raw_interface_index in (None, "") else int(raw_interface_index)
+    )
+    if outbound_interface_index is not None and outbound_interface_index <= 0:
+        raise RuntimeError("tcp_outbound_interface_index 必须是正整数")
     rows: list[dict[str, Any]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
-            pool.submit(tcp_probe, ip, attempts, timeout, port): ip
+            pool.submit(
+                tcp_probe,
+                ip,
+                attempts,
+                timeout,
+                port,
+                socks_proxy,
+                outbound_interface_index,
+            ): ip
             for ip in ips
         }
         done = 0
@@ -2960,6 +3239,109 @@ def speed_test(
         "size_download": int(size),
         "error": error,
     }
+
+
+def parallel_speed_test(
+    curl_bin: str,
+    proxy_url: str,
+    base_url: str,
+    byte_count: int,
+    timeout_seconds: float,
+    concurrency: int,
+    stream_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Measure aggregate throughput without multiplying the byte budget."""
+
+    workers = max(1, min(16, int(concurrency)))
+    if workers == 1:
+        return speed_test(curl_bin, proxy_url, base_url, byte_count, timeout_seconds)
+    total_bytes = max(1, int(byte_count))
+    configured_stream_bytes = (
+        max(1, int(stream_bytes))
+        if stream_bytes is not None
+        else math.ceil(total_bytes / workers)
+    )
+    requested_stream_bytes = min(
+        configured_stream_bytes,
+        max(1, math.ceil(total_bytes / workers)),
+    )
+    started = time.perf_counter()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [
+            pool.submit(
+                speed_test,
+                curl_bin,
+                proxy_url,
+                base_url,
+                requested_stream_bytes,
+                timeout_seconds,
+            )
+            for _ in range(workers)
+        ]
+        results = [future.result() for future in futures]
+    elapsed_seconds = max(0.001, time.perf_counter() - started)
+    failed = [result for result in results if not result.get("ok")]
+    if failed:
+        return {
+            "ok": False,
+            "timed_out": any(bool(result.get("timed_out")) for result in failed),
+            "error": "并发测速子流失败："
+            + " | ".join(str(result.get("error", "未知错误")) for result in failed),
+            "parallel_concurrency": workers,
+            "parallel_stream_bytes": requested_stream_bytes,
+        }
+    size_download = sum(float(result.get("size_download", 0)) for result in results)
+    ttfb_ms = min(float(result.get("ttfb_ms", 0)) for result in results)
+    payload_seconds = max(0.001, elapsed_seconds - ttfb_ms / 1000.0)
+    speed_mbps = size_download * 8 / payload_seconds / 1_000_000
+    return {
+        "ok": size_download >= requested_stream_bytes * workers * 0.9,
+        "timed_out": False,
+        "http_code": min(int(result.get("http_code", 0)) for result in results),
+        "speed_Mbps": round(speed_mbps, 2),
+        "speed_MB_per_s": round(speed_mbps / 8, 2),
+        "connection_average_speed_Mbps": round(
+            sum(float(result.get("connection_average_speed_Mbps", 0)) for result in results),
+            2,
+        ),
+        "ttfb_ms": round(ttfb_ms, 2),
+        "total_ms": round(elapsed_seconds * 1000, 2),
+        "size_download": int(size_download),
+        "parallel_concurrency": workers,
+        "parallel_stream_bytes": requested_stream_bytes,
+        "error": "",
+    }
+
+
+def warmup_speed_test(
+    curl_bin: str,
+    proxy_url: str,
+    base_url: str,
+    byte_count: int,
+    timeout_seconds: float,
+    progress_prefix: str = "",
+) -> dict[str, Any]:
+    """Open a small real tunnel request before recording a speed sample."""
+
+    result = speed_test(
+        curl_bin,
+        proxy_url,
+        base_url,
+        max(1, int(byte_count)),
+        max(1.0, float(timeout_seconds)),
+    )
+    if result.get("ok"):
+        log(
+            f"{progress_prefix}连接预热完成："
+            f"TTFB {result.get('ttfb_ms', 0)} ms；"
+            "预热速度不参与排名"
+        )
+    else:
+        log(
+            f"{progress_prefix}速度预热失败，继续正式测速："
+            f"{result.get('error', '未知错误')}"
+        )
+    return result
 
 
 def repeated_speed_test(
@@ -3639,7 +4021,7 @@ def main() -> int:
             except (OSError, ValueError):
                 pass
     parser = argparse.ArgumentParser(
-        description="Cloudflare 新 IP 动态发现与 Clash/Mihomo 自动优选"
+        description="Cloudflare 新 IP 动态发现与 Clash/Mihomo 或 v2rayN/Xray 自动优选"
     )
     parser.add_argument("--diagnose", action="store_true", help="检查 API 和策略组")
     parser.add_argument(
@@ -3647,9 +4029,30 @@ def main() -> int:
         action="store_true",
         help="轻量模式：抽样最多 200 个新 IP，并减少下载测速流量",
     )
+    parser.add_argument(
+        "--v2rayn-dry-run",
+        action="store_true",
+        help="v2rayN 模式只测试和排名，不写数据库也不切换",
+    )
+    parser.add_argument(
+        "--restore-sg",
+        action="store_true",
+        help="从配置的旧 provider 恢复 SG 模板和正式池",
+    )
+    parser.add_argument(
+        "--restore-vless",
+        action="store_true",
+        help="从配置的旧 Clash 文件恢复 LA VLESS 模板",
+    )
+    parser.add_argument(
+        "--setup-v2rayn-auto",
+        action="store_true",
+        help="创建 v2rayN AUTO-LA/AUTO-SG 槽，不重载核心",
+    )
     args = parser.parse_args()
 
     lock_handle: Any | None = None
+    deep_marker_owned = False
     api: MihomoAPI | None = None
     speed_route_state: dict[str, Any] | None = None
     settings: dict[str, Any] = {}
@@ -3685,6 +4088,13 @@ def main() -> int:
 
     try:
         settings = load_settings()
+        if str(settings.get("client_mode", "mihomo")).strip().lower() == "v2rayn":
+            try:
+                from .v2rayn_mode import run as run_v2rayn
+            except ImportError:
+                from v2rayn_mode import run as run_v2rayn
+
+            return run_v2rayn(args, settings)
         try:
             NOTIFICATION_REPORT_RETENTION_DAYS = min(
                 3650.0,
@@ -3702,6 +4112,24 @@ def main() -> int:
         )
         if args.diagnose:
             return diagnose(api, settings)
+
+        if args.quick:
+            if deep_marker_is_active():
+                message = "深度扫描正在运行，本轮轻量扫描已跳过"
+                log(message)
+                try_write_run_status(
+                    True, "skipped", run_started_at, reason=message
+                )
+                return 0
+        else:
+            deep_marker_owned = try_acquire_deep_marker()
+            if not deep_marker_owned:
+                message = "已有深度扫描正在运行，本轮深度扫描已跳过"
+                log(message)
+                try_write_run_status(
+                    False, "skipped", run_started_at, reason=message
+                )
+                return 0
 
         set_low_process_priority()
         enter_stage("等待前台空闲", "startup")
@@ -4520,7 +4948,15 @@ def main() -> int:
             )
         if not args.diagnose:
             mode = "轻量扫描" if args.quick else "深度扫描"
-            failure_title = f"Clash {mode}：运行失败"
+            is_v2rayn_failure = (
+                str(settings.get("client_mode", "mihomo")).strip().lower()
+                == "v2rayn"
+            )
+            client_label = "v2rayN" if is_v2rayn_failure else "Clash"
+            failure_title = f"{client_label} {mode}：运行失败"
+            failure_report_summary = dict(failure_summary)
+            if is_v2rayn_failure:
+                failure_report_summary["client_mode"] = "v2rayn"
             report_path: Path | None = None
             try:
                 report_path = create_notification_report(
@@ -4532,7 +4968,7 @@ def main() -> int:
                         "switched": False,
                         "reason": f"{stage}：{type(exc).__name__}: {exc}",
                     },
-                    summary=failure_summary,
+                    summary=failure_report_summary,
                     ranked=failure_ranked,
                     failed_rows=failure_rows,
                     retention_days=settings.get(
@@ -4561,6 +4997,8 @@ def main() -> int:
                 log(f"测速出口恢复失败：{restore_result['error']}")
         if lock_handle is not None:
             release_run_lock(lock_handle)
+        if deep_marker_owned:
+            release_deep_marker()
 
 
 if __name__ == "__main__":

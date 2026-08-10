@@ -507,10 +507,15 @@ $StartMenuProgramsDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Pro
 $ToastShortcutPath = Join-Path $StartMenuProgramsDir "Clash Cloudflare Dynamic.lnk"
 
 $OldTask = "Clash Cloudflare Dynamic Discovery 30min"
-$LightTask = "Clash Cloudflare Light Scan 30min"
-$DeepTask = "Clash Cloudflare Deep Scan 5000 6h"
+$LightTask = "Clash Cloudflare Light Scan 2h"
+$DeepTask = "Clash Cloudflare Deep Scan 5000 12h"
+$LegacyLightTask = "Clash Cloudflare Light Scan 30min"
+$LegacyDeepTask = "Clash Cloudflare Deep Scan 5000 6h"
 $HealthTask = "Clash Cloudflare Health Monitor 30min"
 $AggressiveTask = "Clash Cloudflare Deep Scan 5000 30min"
+$V2rayNLightTask = "v2rayN Cloudflare Light Scan 2h"
+$V2rayNDeepTask = "v2rayN Cloudflare Deep Scan 5000 12h"
+$V2rayNHealthTask = "v2rayN Cloudflare Health Monitor 30min"
 $RuntimeFileSpecs = @(
     @{ Name = "dynamic_selector.py"; Root = $CoreSourceDir },
     @{ Name = "health_monitor_launcher.py"; Root = $CoreSourceDir },
@@ -605,6 +610,11 @@ $ManagedTaskBackupNames = [ordered]@{
     $HealthTask = "health-task.xml"
     $OldTask = "old-task.xml"
     $AggressiveTask = "aggressive-task.xml"
+    $LegacyLightTask = "legacy-light-task.xml"
+    $LegacyDeepTask = "legacy-deep-task.xml"
+    $V2rayNLightTask = "v2rayn-light-task.xml"
+    $V2rayNDeepTask = "v2rayn-deep-task.xml"
+    $V2rayNHealthTask = "v2rayn-health-task.xml"
 }
 $ExistingScheduledTasks = @(Get-ScheduledTask -ErrorAction Stop)
 $ExistingTaskNames = @(
@@ -852,7 +862,7 @@ try {
     $LightTrigger = New-ScheduledTaskTrigger `
         -Once `
         -At ((Get-Date).AddMinutes(3)) `
-        -RepetitionInterval (New-TimeSpan -Minutes 30) `
+        -RepetitionInterval (New-TimeSpan -Hours 2) `
         -RepetitionDuration (New-TimeSpan -Days 3650)
     $LightSettings = New-CompatibleTaskSettings -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
 
@@ -862,8 +872,8 @@ try {
         -WorkingDirectory $InstallDir
     $DeepTrigger = New-ScheduledTaskTrigger `
         -Once `
-        -At ((Get-Date).AddMinutes(15)) `
-        -RepetitionInterval (New-TimeSpan -Hours 6) `
+        -At ((Get-Date).AddMinutes(63)) `
+        -RepetitionInterval (New-TimeSpan -Hours 12) `
         -RepetitionDuration (New-TimeSpan -Days 3650)
     $DeepSettings = New-CompatibleTaskSettings -ExecutionTimeLimit (New-TimeSpan -Minutes 150)
 
@@ -892,7 +902,7 @@ try {
             -Action $LightAction `
             -Trigger $LightTrigger `
             -Settings $LightSettings `
-            -Description "每 30 分钟轻量抽样最多 200 个 Cloudflare IP，复测正式池并自动选择。" `
+            -Description "每 2 小时轻量抽样最多 200 个 Cloudflare IP，复测正式池并自动选择。" `
             -Force `
             -ErrorAction Stop | Out-Null
 
@@ -901,7 +911,7 @@ try {
             -Action $DeepAction `
             -Trigger $DeepTrigger `
             -Settings $DeepSettings `
-            -Description "每 6 小时从 Cloudflare 官方 IPv4 网段深度随机抽样 5000 个地址并更新优选池。" `
+            -Description "每 12 小时从 Cloudflare 官方 IPv4 网段深度随机抽样 5000 个地址并更新优选池；深扫期间跳过轻扫。" `
             -Force `
             -ErrorAction Stop | Out-Null
 
@@ -914,7 +924,15 @@ try {
             -Force `
             -ErrorAction Stop | Out-Null
 
-        foreach ($TaskName in @($OldTask, $AggressiveTask)) {
+        foreach ($TaskName in @(
+            $OldTask,
+            $AggressiveTask,
+            $LegacyLightTask,
+            $LegacyDeepTask,
+            $V2rayNLightTask,
+            $V2rayNDeepTask,
+            $V2rayNHealthTask
+        )) {
             if ($ExistingTaskNames -notcontains $TaskName) {
                 continue
             }
@@ -933,7 +951,15 @@ try {
             Get-ScheduledTask -ErrorAction Stop |
                 ForEach-Object { [string]$_.TaskName }
         )
-        foreach ($TaskName in @($OldTask, $AggressiveTask)) {
+        foreach ($TaskName in @(
+            $OldTask,
+            $AggressiveTask,
+            $LegacyLightTask,
+            $LegacyDeepTask,
+            $V2rayNLightTask,
+            $V2rayNDeepTask,
+            $V2rayNHealthTask
+        )) {
             if ($RemainingTaskNames -contains $TaskName) {
                 throw "旧模式计划任务删除后仍然存在：$TaskName"
             }
@@ -1054,8 +1080,8 @@ try {
 
 Write-Host ""
 Write-Host "混合模式安装完成。" -ForegroundColor Green
-Write-Host "轻量任务：每 30 分钟抽样最多 200 个新 IP"
-Write-Host "深度任务：每 6 小时抽样 5000 个新 IP"
+Write-Host "轻量任务：每 2 小时抽样最多 200 个新 IP"
+Write-Host "深度任务：每 12 小时抽样 5000 个新 IP（深扫期间跳过轻扫）"
 Write-Host "健康监控：每 30 分钟检查一次，异常和恢复时通知"
 Write-Host ""
 Write-Host "请导入并启用："

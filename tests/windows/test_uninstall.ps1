@@ -59,7 +59,7 @@ try {
     New-Item -ItemType Directory -Path $InstallDir, $ProviderDir, (Split-Path -Parent $ShortcutPath) -Force | Out-Null
     Set-Content -LiteralPath $ShortcutPath -Value "test"
     $global:ClashCloudflareUninstallTasks = @(
-        [PSCustomObject]@{ TaskName = "Clash Cloudflare Light Scan 30min"; State = "Running" },
+        [PSCustomObject]@{ TaskName = "Clash Cloudflare Light Scan 2h"; State = "Running" },
         [PSCustomObject]@{ TaskName = "Clash Cloudflare Health Monitor 30min"; State = "Ready" }
     )
 
@@ -73,7 +73,7 @@ try {
     New-Item -ItemType Directory -Path (Split-Path -Parent $ShortcutPath) -Force | Out-Null
     Set-Content -LiteralPath $ShortcutPath -Value "test"
     $global:ClashCloudflareUninstallTasks = @(
-        [PSCustomObject]@{ TaskName = "Clash Cloudflare Light Scan 30min"; State = "Ready" }
+        [PSCustomObject]@{ TaskName = "Clash Cloudflare Light Scan 2h"; State = "Ready" }
     )
     $global:ClashCloudflareUninstallQueryFailure = $true
     $QueryFailureRaised = $false

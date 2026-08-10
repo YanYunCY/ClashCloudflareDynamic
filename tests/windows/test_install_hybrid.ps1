@@ -140,8 +140,8 @@ function Get-ScheduledTask {
         )
     } else {
         @(
-            [PSCustomObject]@{ TaskName = "Clash Cloudflare Light Scan 30min"; State = "Ready" },
-            [PSCustomObject]@{ TaskName = "Clash Cloudflare Deep Scan 5000 6h"; State = "Ready" },
+            [PSCustomObject]@{ TaskName = "Clash Cloudflare Light Scan 2h"; State = "Ready" },
+            [PSCustomObject]@{ TaskName = "Clash Cloudflare Deep Scan 5000 12h"; State = "Ready" },
             [PSCustomObject]@{ TaskName = "Clash Cloudflare Health Monitor 30min"; State = "Ready" }
         )
     }
@@ -368,10 +368,10 @@ try {
     }
 
     $LightTask = @($global:ClashCloudflareDynamicTestRegisteredTasks | Where-Object {
-        $_.TaskName -eq "Clash Cloudflare Light Scan 30min"
+        $_.TaskName -eq "Clash Cloudflare Light Scan 2h"
     })
     $DeepTask = @($global:ClashCloudflareDynamicTestRegisteredTasks | Where-Object {
-        $_.TaskName -eq "Clash Cloudflare Deep Scan 5000 6h"
+        $_.TaskName -eq "Clash Cloudflare Deep Scan 5000 12h"
     })
     $HealthTask = @($global:ClashCloudflareDynamicTestRegisteredTasks | Where-Object {
         $_.TaskName -eq "Clash Cloudflare Health Monitor 30min"
@@ -379,6 +379,12 @@ try {
     Assert-Equal 1 $LightTask.Count "轻量任务注册次数异常"
     Assert-Equal 1 $DeepTask.Count "深度任务注册次数异常"
     Assert-Equal 1 $HealthTask.Count "健康监控任务注册次数异常"
+    Assert-Equal ([TimeSpan]::FromHours(2)) $LightTask[0].Trigger.Interval "轻量任务执行周期错误"
+    Assert-Equal ([TimeSpan]::FromHours(12)) $DeepTask[0].Trigger.Interval "深度任务执行周期错误"
+    $DeepOffsetMinutes = ($DeepTask[0].Trigger.At - $LightTask[0].Trigger.At).TotalMinutes
+    if ($DeepOffsetMinutes -lt 59.9 -or $DeepOffsetMinutes -gt 60.1) {
+        throw "深度任务未与轻量任务错开约 1 小时；实际：$DeepOffsetMinutes 分钟"
+    }
     Assert-Equal ([TimeSpan]::FromMinutes(20)) $LightTask[0].Settings.ExecutionTimeLimit "轻量任务执行上限错误"
     Assert-Equal ([TimeSpan]::FromMinutes(150)) $DeepTask[0].Settings.ExecutionTimeLimit "深度任务执行上限错误"
     Assert-Equal ([TimeSpan]::FromMinutes(5)) $HealthTask[0].Settings.ExecutionTimeLimit "健康监控任务执行上限错误"
@@ -492,7 +498,7 @@ try {
     $global:ClashCloudflareDynamicTestMutationPaths = $RollbackPaths
     $global:ClashCloudflareDynamicTestFailHybridTaskName = "Clash Cloudflare Health Monitor 30min"
     $global:ClashCloudflareDynamicTestRunningTasks = @(
-        "Clash Cloudflare Light Scan 30min"
+        "Clash Cloudflare Light Scan 2h"
     )
     $global:ClashCloudflareDynamicTestStartedTasks = @()
     $HybridFailureRaised = $false
@@ -505,12 +511,12 @@ try {
         $global:ClashCloudflareDynamicTestMutationPaths = @()
     }
     Assert-Equal $true $HybridFailureRaised "混合任务注册失败后未报告回滚"
-    Assert-Equal $true ($global:ClashCloudflareDynamicTestStartedTasks -contains "Clash Cloudflare Light Scan 30min") "安装失败后未重启原先正在运行的任务"
+    Assert-Equal $true ($global:ClashCloudflareDynamicTestStartedTasks -contains "Clash Cloudflare Light Scan 2h") "安装失败后未重启原先正在运行的任务"
     $HybridFailureRegistrations = @($global:ClashCloudflareDynamicTestRegisteredTasks | Select-Object -Skip $BeforeHybridFailureRegistrationCount)
     $RestoredTaskNames = @($HybridFailureRegistrations | Where-Object {
         -not [string]::IsNullOrWhiteSpace([string]$_.Xml)
     } | ForEach-Object { $_.TaskName })
-    foreach ($TaskName in "Clash Cloudflare Light Scan 30min", "Clash Cloudflare Deep Scan 5000 6h", "Clash Cloudflare Health Monitor 30min") {
+    foreach ($TaskName in "Clash Cloudflare Light Scan 2h", "Clash Cloudflare Deep Scan 5000 12h", "Clash Cloudflare Health Monitor 30min") {
         if ($RestoredTaskNames -notcontains $TaskName) {
             throw "混合任务注册失败后未从 XML 恢复：$TaskName"
         }
@@ -556,7 +562,7 @@ try {
     Assert-Equal $true $AggressiveFailureRaised "激进任务注册失败未向上报告"
     Assert-Equal 0 @($global:ClashCloudflareDynamicTestUnregisteredTasks).Count "激进任务注册失败前已删除现有任务"
 
-    $global:ClashCloudflareDynamicTestFailUnregisterTaskName = "Clash Cloudflare Deep Scan 5000 6h"
+    $global:ClashCloudflareDynamicTestFailUnregisterTaskName = "Clash Cloudflare Deep Scan 5000 12h"
     $AggressiveCleanupFailureRaised = $false
     $AggressiveCleanupFailureMessage = ""
     try {
@@ -568,7 +574,7 @@ try {
         $global:ClashCloudflareDynamicTestFailUnregisterTaskName = $null
     }
     Assert-Equal $true $AggressiveCleanupFailureRaised "激进模式清理旧任务失败未报告：$AggressiveCleanupFailureMessage"
-    Assert-Equal $false ($global:ClashCloudflareDynamicTestUnregisteredTasks -contains "Clash Cloudflare Light Scan 30min") "激进模式回滚后未恢复 Light"
+    Assert-Equal $false ($global:ClashCloudflareDynamicTestUnregisteredTasks -contains "Clash Cloudflare Light Scan 2h") "激进模式回滚后未恢复 Light"
     Assert-Equal $true ($global:ClashCloudflareDynamicTestUnregisteredTasks -contains "Clash Cloudflare Deep Scan 5000 30min") "激进模式回滚后未移除新 Aggressive；异常=$AggressiveCleanupFailureMessage；注销=$($global:ClashCloudflareDynamicTestUnregisteredTasks -join ',')"
 
     & $AggressiveScript
@@ -611,7 +617,15 @@ try {
         }
     }
     $HealthRegistrationIndex = $InstallerText.IndexOf('-TaskName $HealthTask')
-    $ObsoleteCleanupIndex = $InstallerText.IndexOf('foreach ($TaskName in @($OldTask, $AggressiveTask))')
+    $ObsoleteCleanupMatch = [regex]::Match(
+        $InstallerText,
+        'foreach\s*\(\$TaskName\s+in\s+@\(\s*\$OldTask,\s*\$AggressiveTask,'
+    )
+    $ObsoleteCleanupIndex = if ($ObsoleteCleanupMatch.Success) {
+        $ObsoleteCleanupMatch.Index
+    } else {
+        -1
+    }
     if ($HealthRegistrationIndex -lt 0 -or $ObsoleteCleanupIndex -le $HealthRegistrationIndex) {
         throw "混合安装器在替代任务成功前清理旧任务"
     }
@@ -629,7 +643,7 @@ try {
         [PSCustomObject]@{
             Mode = "light"
             Label = "轻量扫描"
-            TaskName = "Clash Cloudflare Light Scan 30min"
+            TaskName = "Clash Cloudflare Light Scan 2h"
             MaxAge = [TimeSpan]::FromMinutes(90)
             Exists = $true
             Enabled = $true
@@ -647,7 +661,7 @@ try {
         [PSCustomObject]@{
             Mode = "deep"
             Label = "深度扫描"
-            TaskName = "Clash Cloudflare Deep Scan 5000 6h"
+            TaskName = "Clash Cloudflare Deep Scan 5000 12h"
             MaxAge = [TimeSpan]::FromHours(8)
             Exists = $true
             Enabled = $true
@@ -720,6 +734,10 @@ try {
     $HybridConfiguration = Get-HealthTaskConfiguration
     Assert-Equal "hybrid" $HybridConfiguration.ActiveMode "健康监控未识别混合模式"
     Assert-Equal 2 @($HybridConfiguration.Definitions).Count "混合模式健康定义数量错误"
+    $HybridLightDefinition = @($HybridConfiguration.Definitions | Where-Object { $_.Mode -eq "light" })[0]
+    $HybridDeepDefinition = @($HybridConfiguration.Definitions | Where-Object { $_.Mode -eq "deep" })[0]
+    Assert-Equal ([TimeSpan]::FromHours(5)) $HybridLightDefinition.MaxAge "轻量扫描健康超时错误"
+    Assert-Equal ([TimeSpan]::FromHours(26)) $HybridDeepDefinition.MaxAge "深度扫描健康超时错误"
     $global:ClashCloudflareDynamicTestAggressiveOnly = $true
     $AggressiveConfiguration = Get-HealthTaskConfiguration
     Assert-Equal "aggressive" $AggressiveConfiguration.ActiveMode "健康监控未识别激进模式"
@@ -882,7 +900,7 @@ try {
 
     $ReconfigureOutput = @(
         $global:ClashCloudflareDynamicTestRunningTasks = @(
-            "Clash Cloudflare Light Scan 30min"
+            "Clash Cloudflare Light Scan 2h"
         )
         & $InstallScript `
             -SourceSettingsPath $ReconfigureSettingsPath `
@@ -890,8 +908,8 @@ try {
             -ReplaceInstalledConfiguration `
             -NoOpenExplorer
     ) -join "`n"
-    Assert-Equal $true ($global:ClashCloudflareDynamicTestStoppedTasks -contains "Clash Cloudflare Light Scan 30min") "重新配置前未停止正在运行的扫描任务"
-    foreach ($TaskName in "Clash Cloudflare Light Scan 30min", "Clash Cloudflare Deep Scan 5000 6h", "Clash Cloudflare Health Monitor 30min") {
+    Assert-Equal $true ($global:ClashCloudflareDynamicTestStoppedTasks -contains "Clash Cloudflare Light Scan 2h") "重新配置前未停止正在运行的扫描任务"
+    foreach ($TaskName in "Clash Cloudflare Light Scan 2h", "Clash Cloudflare Deep Scan 5000 12h", "Clash Cloudflare Health Monitor 30min") {
         Assert-Equal $true ($global:ClashCloudflareDynamicTestDisabledTasks -contains $TaskName) "重新配置期间未禁用计划任务：$TaskName"
     }
     if ($ReconfigureOutput -match "fixture-reconfigure-(secret|password)") {
