@@ -175,6 +175,11 @@ try {
     }
 
     Write-Host "v2rayN installer isolation tests passed"
+    # GitHub Actions' PowerShell wrapper propagates a native child's last exit
+    # code even when that non-zero code was intentionally asserted above.
+    # Clear it explicitly so expected-invalid-input checks cannot fail the
+    # whole isolation-test step after all assertions have passed.
+    $global:LASTEXITCODE = 0
 } finally {
     if (Test-Path -LiteralPath $TempRoot) {
         Remove-Item -LiteralPath $TempRoot -Recurse -Force
