@@ -56,6 +56,31 @@ class ReleaseBuildTests(unittest.TestCase):
             self.assertEqual(settings["speed_timeout_seconds"], 60)
             self.assertEqual(settings["quick_speed_test_bytes"], 3_000_000)
             self.assertEqual(settings["quick_speed_timeout_seconds"], 20)
+            for private_topology_key in (
+                "v2rayn_enable_sg",
+                "v2rayn_enable_la_vless",
+                "v2rayn_compare_hy2",
+                "v2rayn_active_slot_ids",
+                "v2rayn_sg_recovery_provider",
+                "v2rayn_la_vless_recovery_profile",
+            ):
+                self.assertNotIn(private_topology_key, settings)
+
+            published_text = "\n".join(
+                (package_root / relative).read_text(
+                    encoding="utf-8-sig",
+                    errors="ignore",
+                )
+                for relative in staged
+                if relative.suffix.casefold()
+                in {".json", ".md", ".ps1", ".py", ".txt", ".yaml", ".yml"}
+            )
+            for private_topology_marker in (
+                "AUTO-LA",
+                "AUTO-SG",
+                "e0a4ee22-c8d3-4975-a102-de1f410de7b3.yaml",
+            ):
+                self.assertNotIn(private_topology_marker, published_text)
 
             with zipfile.ZipFile(archive_path) as archive:
                 archived = set(archive.namelist())

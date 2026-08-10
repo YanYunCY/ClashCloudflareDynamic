@@ -63,6 +63,16 @@ CRLF_SUFFIXES = {".bat", ".cmd", ".ps1"}
 LF_SUFFIXES = {"", ".json", ".md", ".py", ".txt", ".yaml", ".yml"}
 UTF8_BOM = b"\xef\xbb\xbf"
 
+# These identifiers belonged to a maintainer's private multi-line deployment.
+# They must never reappear in a public package even without actual credentials.
+FORBIDDEN_PUBLIC_MARKERS = (
+    "AUTO-LA",
+    "AUTO-SG",
+    "e0a4ee22-c8d3-4975-a102-de1f410de7b3.yaml",
+    "v2rayn_sg_recovery_provider",
+    "v2rayn_la_vless_recovery_profile",
+)
+
 FORBIDDEN_FILE_NAMES = {
     "settings.json",
     "node_template.json",
@@ -170,6 +180,24 @@ def validate_staged_package(
     for json_path in package_root.joinpath("examples").glob("*.json"):
         with json_path.open("r", encoding="utf-8-sig") as handle:
             json.load(handle)
+
+    for path in package_root.rglob("*"):
+        if not path.is_file() or path.suffix.casefold() not in {
+            ".json",
+            ".md",
+            ".ps1",
+            ".py",
+            ".txt",
+            ".yaml",
+            ".yml",
+        }:
+            continue
+        text = path.read_text(encoding="utf-8-sig", errors="ignore")
+        for marker in FORBIDDEN_PUBLIC_MARKERS:
+            if marker in text:
+                raise RuntimeError(
+                    f"private deployment marker entered public release: {marker} in {path}"
+                )
 
     missing = sorted(required_destinations.difference(staged_files))
     if missing:

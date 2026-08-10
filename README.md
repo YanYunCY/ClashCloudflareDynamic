@@ -29,7 +29,7 @@ tools/privacy_check.py         发布前隐私检查
 
 `v1.3.0` 已把 Windows 安装器迁移为 WPF 单页界面：主配置位于左侧，脱敏实时摘要位于右侧，本地 Mihomo 连接设置默认折叠。界面支持“跟随系统 / 浅色 / 深色”，使用系统强调色、轻量设置卡片和响应式布局；窄窗口会收起摘要，表单可独立滚动且底部操作栏保持固定。安装器也针对 Per-Monitor V2 DPI、ClearType 和布局像素对齐做了专门处理。
 
-`v1.5.0` 新增 v2rayN/Xray 后端。双击 `Install.cmd` 可选择 Clash/Mihomo 或 v2rayN/Xray；后者使用 v2rayN 自带 Xray 做真实 VMess/WS/TLS 验证，通过 SQLite 活动槽和 v2rayN 自身 Reload 热切换，不结束桌面主进程。公开配置默认不启用 SG、VLESS 或 HY2，也不包含任何节点凭据。
+`v1.5.1` 修正 v2rayN/Xray 后端的公开安装模型。双击 `Install.cmd` 可选择 Clash/Mihomo 或 v2rayN/Xray；后者只使用安装用户自己填写的节点模板，通过通用 `AUTO-CF` SQLite 活动槽和 v2rayN 自身 Reload 热切换，不结束桌面主进程。Release 不包含任何节点凭据、维护者本机路径或私有拓扑。
 
 ## 版本与下载
 
@@ -37,7 +37,8 @@ tools/privacy_check.py         发布前隐私检查
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
-| `v1.5.0` | 最新稳定版 | 安装时可选择 Clash/Mihomo 或 v2rayN/Xray 后端 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.5.0) |
+| `v1.5.1` | 最新稳定版 | 通用 v2rayN/Xray 后端，用户自有模板驱动 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.5.1) |
+| `v1.5.0` | 历史版本 | 首次加入 v2rayN/Xray 后端；不建议新安装使用 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.5.0) |
 | `v1.4.0` | 历史稳定版 | 测速口径统一、深扫 20 MB、测速出口恢复、Release 完整门禁 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.4.0) |
 | `v1.3.7` | 历史稳定版 | 修复 ranges cache 和 JSON 临时文件原子写入 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.7) |
 | `v1.3.6` | 历史稳定版 | 修复切换间隔边界条件（90秒宽限期） | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.6) |
@@ -85,7 +86,7 @@ tools/privacy_check.py         发布前隐私检查
 
 Clash/Mihomo 模式支持 VMess、VLESS、Trojan 和自定义 Mihomo 节点模板，具体字段以 [Mihomo 官方文档](https://wiki.metacubex.one/en/config/proxies/) 为准。
 
-v2rayN/Xray 模式要求 v2rayN 根目录包含 `v2rayN.exe`、`guiConfigs/guiNDB.db`、`guiConfigs/guiNConfig.json` 和 `bin/xray/xray.exe`。当前实现按 v2rayN 7.24.x 的 SQLite 结构开发和测试；安装器不会下载或替换 v2rayN。公开安装只创建基础 VMess + WebSocket + TLS 模板，SG、VLESS 和 HY2 需要用户自己已有的本地模板或配置并显式启用。
+v2rayN/Xray 模式要求 v2rayN 根目录包含 `v2rayN.exe`、`guiConfigs/guiNDB.db`、`guiConfigs/guiNConfig.json` 和 `bin/xray/xray.exe`。当前实现按 v2rayN 7.24.x 的 SQLite 结构开发和测试；安装器不会下载或替换 v2rayN。安装器只生成一套由用户填写认证、端口、SNI、Host 和路径的 VMess + WebSocket + TLS 模板；不会读取、复制或假设维护者的节点、地区、出口或数据库槽位。
 
 默认地址：
 
@@ -154,9 +155,9 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 v2rayN 安装器只生成本机工具配置和计划任务，不安装客户端，也不把公开示例直接写进 v2rayN 数据库。首次安装后：
 
 1. 保持 v2rayN 正常运行，确认系统代理或 TUN 至少启用一个；
-2. 运行 `python "%LOCALAPPDATA%\ClashCloudflareDynamic\dynamic_selector.py" --setup-v2rayn-auto`，创建相互隔离的 `AUTO-LA` 与 `AUTO-SG` 原生活动槽；
-3. 在 v2rayN 中把 `AUTO-LA` 设为活动节点。公开默认配置只会在 LA VMess 优选节点中更新；只有用户自行提供并启用本地配置后，VLESS 或 HY2 才会进入该组；
-4. 仅在自行配置 SG 模板后使用 `AUTO-SG`。该组只允许 SG VMess，不会跨组切到 LA 或 HY2；
+2. 运行 `python "%LOCALAPPDATA%\ClashCloudflareDynamic\dynamic_selector.py" --setup-v2rayn-auto`，创建通用的 `AUTO-CF` 原生活动槽；
+3. 在 v2rayN 中把 `AUTO-CF` 设为活动节点。优选器只更新用户安装时填写的模板，不会跨协议、跨地区或跨设备读取其他节点；
+4. 如需另一套协议或线路，请单独运行另一份安装目录并填写另一份用户自有模板，不要把私人数据库或运行目录复制进 Release；
 5. 运行 `python "%LOCALAPPDATA%\ClashCloudflareDynamic\dynamic_selector.py" --diagnose`，确认 v2rayN、Xray、活动槽、系统代理/TUN 和路由状态。
 
 自动切换会事务备份 `guiNDB.db`，把胜出配置复制到当前 AUTO 槽，再调用 v2rayN 自身的 Reload 控件热重载子核心；不会退出或强制结束 v2rayN 桌面进程。若当前节点不是 AUTO 槽，程序只更新节点库并拒绝旧式重启切换。

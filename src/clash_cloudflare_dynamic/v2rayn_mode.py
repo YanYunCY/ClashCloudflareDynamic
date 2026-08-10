@@ -3,10 +3,9 @@
 """Native v2rayN/Xray backend for the Cloudflare preferred-IP selector.
 
 The module deliberately keeps the running v2rayN proxy out of the scan data
-path.  Candidate VMess/WS/TLS nodes are exposed on temporary loopback HTTP
-ports by the Xray binary bundled with v2rayN.  Only validated nodes are written
-to v2rayN's SQLite database.  A switch is protected by a second, independently
-verified Hysteria client, so the Windows proxy is never changed to DIRECT.
+path.  Candidates built from the user's own public-install template are
+exposed on temporary loopback HTTP ports by the Xray binary bundled with
+v2rayN.  Only validated nodes are written to v2rayN's SQLite database.
 
 The running v2rayN desktop process is never terminated for node changes.  A
 dedicated database row acts as the active slot: its profile payload is replaced
@@ -31,9 +30,7 @@ import statistics
 import subprocess
 import tempfile
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
@@ -51,12 +48,11 @@ RUNTIME_ROOT = (
     / "v2rayn"
 )
 ACTIVE_STATE_PATH = RUNTIME_ROOT / "active_pools.json"
-SG_TEMPLATE_PATH = RUNTIME_ROOT / "sg_node_template.json"
-LA_VLESS_TEMPLATE_PATH = RUNTIME_ROOT / "la_vless_node_template.json"
 BACKUP_DIR = RUNTIME_ROOT / "backups"
 XRAY_LOG_PATH = RUNTIME_ROOT / "xray_scan.log"
 NRPT_TUN_DNS_COMMENT = "CCD v2rayN TUN DNS workaround"
-AUTO_MODES = ("la", "sg")
+AUTO_MODE = "cf"
+AUTO_MODES = (AUTO_MODE,)
 
 
 def _speed_url(settings: dict[str, Any], purpose: str) -> str:
@@ -131,30 +127,21 @@ def _stable_id(namespace: str, value: str) -> str:
 
 
 def _auto_group_specs() -> dict[str, dict[str, Any]]:
-    """Return the two visible, deliberately separate AUTO subscription groups."""
+    """Return the generic public AUTO subscription group."""
 
     return {
-        "la": {
-            "id": _stable_id("v2rayn-pool", "auto-la"),
-            "remarks": "① AUTO-LA｜LA VMess + VLESS + HY2",
-            "memo": "只在 LA VMess、LA VLESS、HY2 之间自动优选",
-        },
-        "sg": {
-            "id": _stable_id("v2rayn-pool", "auto-sg"),
-            "remarks": "② AUTO-SG｜仅 SG VMess",
-            "memo": "只在 SG VMess 优选节点之间自动切换",
+        AUTO_MODE: {
+            "id": _stable_id("v2rayn-pool", "auto-cf"),
+            "remarks": "AUTO-CF｜Cloudflare 自动优选",
+            "memo": "只使用安装时由用户提供的节点模板自动优选 Cloudflare 入口",
         },
     }
 
 
 def _auto_slot_remarks(mode: str, target_remarks: str) -> str:
-    if mode == "la":
-        scope = "LA VMess + VLESS + HY2"
-    elif mode == "sg":
-        scope = "仅 SG VMess"
-    else:
+    if mode != AUTO_MODE:
         raise RuntimeError(f"未知自动模式：{mode}")
-    return f"AUTO-{mode.upper()}｜{scope}｜当前：{target_remarks}"
+    return f"AUTO-CF｜当前：{target_remarks}"
 
 
 def _full_routing_rules() -> list[dict[str, Any]]:
@@ -402,15 +389,7 @@ def _v2rayn_paths(settings: dict[str, Any]) -> dict[str, Path]:
         "db": root / "guiConfigs" / "guiNDB.db",
         "config": root / "guiConfigs" / "guiNConfig.json",
         "xray": root / "bin" / "xray" / "xray.exe",
-        "hysteria": root
-        / "bin"
-        / "hysteria2"
-        / "hysteria-windows-amd64.exe",
     }
-
-
-def _hy2_comparison_enabled(settings: dict[str, Any]) -> bool:
-    return bool(settings.get("v2rayn_compare_hy2", False))
 
 
 def _required_core_names(
@@ -419,255 +398,41 @@ def _required_core_names(
     names = ["db", "config", "xray"]
     if include_desktop:
         names.insert(0, "exe")
-    if _hy2_comparison_enabled(settings):
-        names.append("hysteria")
     return tuple(names)
 
 
-def _read_provider(path: Path) -> list[dict[str, Any]]:
-    value = _load_json(path, {})
-    proxies = value.get("proxies", []) if isinstance(value, dict) else []
-    return [item for item in proxies if isinstance(item, dict)]
+def _load_pools(settings: dict[str, Any]) -> list[PoolSpec]:
+    """Load exactly the node template supplied by the installing user."""
 
-
-def _template_from_node(node: dict[str, Any]) -> dict[str, Any]:
-    result = copy.deepcopy(node)
-    result.pop("name", None)
-    result.pop("server", None)
-    return result
-
-
-def _yaml_scalar(value: str) -> Any:
-    """Parse the small scalar subset used by v2rayN's Clash export."""
-
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-        value = value[1:-1]
-    lowered = value.lower()
-    if lowered in {"true", "false"}:
-        return lowered == "true"
-    if value.isdecimal():
-        return int(value)
-    return value
-
-
-def _load_vless_from_clash(path: Path) -> tuple[dict[str, Any], str]:
-    """Recover the first VLESS node from a simple Clash profile.
-
-    PyYAML is intentionally not a runtime dependency.  v2rayN's one-node Clash
-    export has a stable, shallow layout, so only the fields needed by Xray are
-    parsed here.  Credentials stay in the private runtime template.
-    """
-
-    if not path.is_file():
-        raise RuntimeError(f"LA VLESS 恢复源不存在：{path}")
-    root: dict[str, Any] = {}
-    xhttp: dict[str, Any] = {}
-    alpn: list[str] = []
-    in_proxies = in_vless = in_xhttp = in_alpn = False
-    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
-        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
-            continue
-        indent = len(raw_line) - len(raw_line.lstrip(" "))
-        text = raw_line.strip()
-        if indent == 0:
-            in_proxies = text == "proxies:"
-            if not in_proxies and in_vless:
-                break
-            continue
-        if not in_proxies:
-            continue
-        if indent == 2 and text.startswith("- "):
-            if in_vless:
-                break
-            root = {}
-            xhttp = {}
-            alpn = []
-            in_xhttp = in_alpn = False
-            text = text[2:].strip()
-        if indent <= 4 and text.startswith("type:"):
-            node_type = str(_yaml_scalar(text.split(":", 1)[1])).lower()
-            in_vless = node_type == "vless"
-        if not in_vless:
-            continue
-        if indent == 4 and text.endswith(":"):
-            key = text[:-1]
-            in_xhttp = key == "xhttp-opts"
-            in_alpn = key == "alpn"
-            continue
-        if indent == 4 and ":" in text:
-            key, value = text.split(":", 1)
-            root[key.strip()] = _yaml_scalar(value)
-            in_xhttp = in_alpn = False
-        elif indent >= 6 and in_xhttp and ":" in text:
-            key, value = text.split(":", 1)
-            xhttp[key.strip()] = _yaml_scalar(value)
-        elif indent >= 6 and in_alpn and text.startswith("- "):
-            alpn.append(str(_yaml_scalar(text[2:])))
-    if not in_vless or not root:
-        raise RuntimeError("LA VLESS 恢复源中没有 VLESS 节点")
-    if xhttp:
-        root["xhttp-opts"] = xhttp
-    if alpn:
-        root["alpn"] = alpn
-    required = ("server", "port", "uuid", "servername", "network", "xhttp-opts")
-    missing = [key for key in required if not root.get(key)]
-    if missing:
-        raise RuntimeError("LA VLESS 节点模板缺少字段：" + ", ".join(missing))
-    server = str(ipaddress.IPv4Address(str(root.pop("server"))))
-    root["type"] = "vless"
-    return root, server
-
-
-def restore_vless_runtime(settings: dict[str, Any]) -> dict[str, Any]:
-    raw = str(settings.get("v2rayn_la_vless_recovery_profile", "")).strip()
-    source = Path(os.path.expandvars(raw)) if raw else (
-        _v2rayn_root(settings)
-        / "guiConfigs"
-        / "e0a4ee22-c8d3-4975-a102-de1f410de7b3.yaml"
-    )
-    template, server = _load_vless_from_clash(source)
-    _save_json_atomic(LA_VLESS_TEMPLATE_PATH, template)
-    state = _load_json(ACTIVE_STATE_PATH, {})
-    if not isinstance(state, dict):
-        state = {}
-    values = state.get("la-vless", [])
-    active = [str(item) for item in values] if isinstance(values, list) else []
-    if not active:
-        active = [server]
-    elif server not in active:
-        # The legacy export is only a credential/template recovery source.  A
-        # newer protocol-verified preferred IP must keep priority over it.
-        active.append(server)
-    state["la-vless"] = active
-    state.setdefault("updated_at", selector.now_iso())
-    _save_json_atomic(ACTIVE_STATE_PATH, state)
-    return {"source": str(source), "active_count": len(active)}
-
-
-def restore_sg_runtime(settings: dict[str, Any]) -> dict[str, Any]:
-    """Recover the old SG template/active IPs without placing credentials in Git."""
-    source = Path(
-        os.path.expandvars(str(settings.get("v2rayn_sg_recovery_provider", "")))
-    )
-    if not source.is_file():
-        raise RuntimeError(f"SG 恢复源不存在：{source}")
-    proxies = _read_provider(source)
-    vmess = [item for item in proxies if str(item.get("type", "")).lower() == "vmess"]
-    if not vmess:
-        raise RuntimeError("SG 恢复源中没有 VMess 节点")
-    template = _template_from_node(vmess[0])
-    required = ("uuid", "port", "servername", "ws-opts")
-    missing = [key for key in required if not template.get(key)]
-    if missing:
-        raise RuntimeError("SG 节点模板缺少字段：" + ", ".join(missing))
-    _save_json_atomic(SG_TEMPLATE_PATH, template)
-
-    state = _load_json(ACTIVE_STATE_PATH, {})
-    if not isinstance(state, dict):
-        state = {}
-    active_ips: list[str] = []
-    for node in vmess:
-        try:
-            ip = str(ipaddress.IPv4Address(str(node.get("server", ""))))
-        except ipaddress.AddressValueError:
-            continue
-        if ip not in active_ips:
-            active_ips.append(ip)
-    state["sg"] = active_ips
-    state.setdefault("updated_at", selector.now_iso())
-    _save_json_atomic(ACTIVE_STATE_PATH, state)
-    return {"source": str(source), "active_count": len(active_ips)}
-
-
-def _load_initial_la_ips(settings: dict[str, Any]) -> list[str]:
-    raw = str(settings.get("v2rayn_la_active_provider", "")).strip()
-    path = (
-        Path(os.path.expandvars(raw))
-        if raw
-        else selector.ACTIVE_PROVIDER_PATH
-    )
-    result: list[str] = []
-    for node in _read_provider(path):
-        try:
-            ip = str(ipaddress.IPv4Address(str(node.get("server", ""))))
-        except ipaddress.AddressValueError:
-            continue
-        if ip not in result:
-            result.append(ip)
-    return result
-
-
-def _load_pools(settings: dict[str, Any], *, recover_sg: bool) -> list[PoolSpec]:
-    if recover_sg and not SG_TEMPLATE_PATH.is_file():
-        restore_sg_runtime(settings)
-    la_template = selector.load_template()
-    pools = [
+    template = selector.load_template()
+    protocol = str(template.get("type") or "vmess").strip().upper()
+    return [
         PoolSpec(
-            key="la",
-            label="LA VMess",
-            active_prefix="LA-A",
-            discovery_prefix="LA-D",
-            template=la_template,
+            key=AUTO_MODE,
+            label=f"Cloudflare {protocol}",
+            active_prefix="CF-A",
+            discovery_prefix="CF-D",
+            template=template,
         )
     ]
-    if bool(settings.get("v2rayn_enable_la_vless", True)):
-        if recover_sg and not LA_VLESS_TEMPLATE_PATH.is_file():
-            restore_vless_runtime(settings)
-        if not LA_VLESS_TEMPLATE_PATH.is_file():
-            raise RuntimeError(
-                "LA VLESS 模板尚未恢复；检查 v2rayn_la_vless_recovery_profile"
-            )
-        vless_template = _load_json(LA_VLESS_TEMPLATE_PATH, {})
-        if not isinstance(vless_template, dict) or not vless_template:
-            raise RuntimeError("LA VLESS 运行时模板无效")
-        pools.append(
-            PoolSpec(
-                key="la-vless",
-                label="LA VLESS XHTTP",
-                active_prefix="LA-VLESS-A",
-                discovery_prefix="LA-VLESS-D",
-                template=vless_template,
-            )
-        )
-    if bool(settings.get("v2rayn_enable_sg", True)):
-        if not SG_TEMPLATE_PATH.is_file():
-            raise RuntimeError(
-                "SG 模板尚未恢复；先运行 dynamic_selector.py --restore-sg"
-            )
-        sg_template = _load_json(SG_TEMPLATE_PATH, {})
-        if not isinstance(sg_template, dict) or not sg_template:
-            raise RuntimeError("SG 运行时模板无效")
-        pools.append(
-            PoolSpec(
-                key="sg",
-                label="SG VMess",
-                active_prefix="SG-A",
-                discovery_prefix="SG-D",
-                template=sg_template,
-            )
-        )
-    return pools
 
 
 def _load_active_state(settings: dict[str, Any]) -> dict[str, list[str]]:
     state = _load_json(ACTIVE_STATE_PATH, {})
     if not isinstance(state, dict):
         state = {}
-    result: dict[str, list[str]] = {}
-    for key in ("la", "la-vless", "sg"):
-        values = state.get(key, [])
-        result[key] = []
-        if isinstance(values, list):
-            for raw in values:
-                try:
-                    ip = str(ipaddress.IPv4Address(str(raw)))
-                except ipaddress.AddressValueError:
-                    continue
-                if ip not in result[key]:
-                    result[key].append(ip)
-    if not result["la"]:
-        result["la"] = _load_initial_la_ips(settings)
+    result: dict[str, list[str]] = {AUTO_MODE: []}
+    values = state.get(AUTO_MODE, [])
+    if isinstance(values, list):
+        for raw in values:
+            try:
+                ip = str(ipaddress.IPv4Address(str(raw)))
+            except ipaddress.AddressValueError:
+                continue
+            if ip not in result[AUTO_MODE]:
+                result[AUTO_MODE].append(ip)
+    if not result[AUTO_MODE]:
+        result[AUTO_MODE] = selector.load_seed_ips()
     return result
 
 
@@ -1070,262 +835,6 @@ def _select_probe_keys(
     return result
 
 
-def _hy2_source_config(settings: dict[str, Any]) -> Path:
-    paths = _v2rayn_paths(settings)
-    configured = str(settings.get("v2rayn_hy2_config", "")).strip()
-    if configured:
-        path = Path(os.path.expandvars(configured))
-        if path.is_file():
-            return path
-    config = _load_json(paths["config"], {})
-    current_id = str(config.get("IndexId", "")) if isinstance(config, dict) else ""
-    with sqlite3.connect(paths["db"]) as connection:
-        row = connection.execute(
-            "SELECT Address FROM ProfileItem WHERE IndexId=? AND CoreType=26",
-            (current_id,),
-        ).fetchone()
-        if row:
-            path = paths["root"] / "guiConfigs" / str(row[0])
-            if path.is_file():
-                return path
-        row = connection.execute(
-            "SELECT Address FROM ProfileItem WHERE CoreType=26 ORDER BY rowid LIMIT 1"
-        ).fetchone()
-    if row:
-        path = paths["root"] / "guiConfigs" / str(row[0])
-        if path.is_file():
-            return path
-    raise RuntimeError("找不到 v2rayN 的 HY2 配置文件，无法建立安全保底链路")
-
-
-def _rewrite_hy2_inbounds(text: str, socks_port: int, http_port: int) -> str:
-    lines = text.splitlines()
-    output: list[str] = []
-    section = ""
-    saw_socks = saw_http = False
-    for line in lines:
-        stripped = line.strip()
-        if line and not line[0].isspace() and stripped.endswith(":"):
-            section = stripped[:-1]
-        if section == "socks5" and stripped.startswith("listen:"):
-            output.append(f"  listen: 127.0.0.1:{socks_port}")
-            saw_socks = True
-            continue
-        if section == "http" and stripped.startswith("listen:"):
-            output.append(f"  listen: 127.0.0.1:{http_port}")
-            saw_http = True
-            continue
-        output.append(line)
-    if not saw_socks:
-        output.extend(["", "socks5:", f"  listen: 127.0.0.1:{socks_port}"])
-    if not saw_http:
-        output.extend(["", "http:", f"  listen: 127.0.0.1:{http_port}"])
-    return "\n".join(output).rstrip() + "\n"
-
-
-def _hy2_server_ipv4s(config_text: str) -> tuple[str, ...]:
-    """Extract IPv4 server addresses from a Hysteria client config.
-
-    The production profile currently uses a literal IPv4 address.  Resolving
-    a hostname as a fallback keeps the bypass correct if the profile is later
-    changed to a domain with multiple A records.
-    """
-
-    server_value = ""
-    for line in config_text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("server:"):
-            server_value = stripped.split(":", 1)[1].strip().strip("'\"")
-            break
-    if not server_value:
-        raise RuntimeError("HY2 配置缺少 server，无法绕过 TUN 测速")
-    if "://" in server_value:
-        host = urllib.parse.urlsplit(server_value).hostname or ""
-    elif server_value.startswith("[") and "]" in server_value:
-        host = server_value[1 : server_value.index("]")]
-    else:
-        host = server_value.rsplit(":", 1)[0] if ":" in server_value else server_value
-    host = host.strip().strip("[]")
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        try:
-            resolved = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_DGRAM)
-        except OSError as exc:
-            raise RuntimeError(f"HY2 server DNS 解析失败：{host}：{exc}") from exc
-        return tuple(sorted({str(item[4][0]) for item in resolved}))
-    if address.version != 4:
-        return ()
-    return (str(address),)
-
-
-def _hy2_display_name(config_text: str) -> str:
-    """Return a credential-free label containing only the configured UDP port."""
-
-    for line in config_text.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("server:"):
-            continue
-        value = stripped.split(":", 1)[1].strip().strip("'\"")
-        if "://" in value:
-            parsed = urllib.parse.urlsplit(value)
-            try:
-                port = parsed.port
-            except ValueError:
-                port = None
-            if port:
-                return f"HY2 | UDP {port}"
-        elif value.startswith("[") and "]:" in value:
-            return f"HY2 | UDP {value.rsplit(':', 1)[1]}"
-        elif ":" in value:
-            return f"HY2 | UDP {value.rsplit(':', 1)[1]}"
-        break
-    return "HY2"
-
-
-class _WindowsHy2RouteBypass:
-    """Temporarily route the HY2 gateway outside a catch-all TUN.
-
-    v2rayN's TUN config marks Xray and sing-box as direct test processes, but
-    a separately launched Hysteria executable is not on that allow-list.  A
-    host route for only the HY2 gateway prevents the scanner from measuring a
-    nested HY2-over-the-current-proxy path.  Routes are non-persistent and
-    removed as soon as the temporary client exits.
-    """
-
-    def __init__(self, addresses: tuple[str, ...]):
-        self.addresses = tuple(addresses)
-        self._added: list[tuple[str, str, int]] = []
-
-    @staticmethod
-    def _powershell(script: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=15,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            check=False,
-        )
-
-    def __enter__(self) -> "_WindowsHy2RouteBypass":
-        if os.name != "nt" or not self.addresses:
-            return self
-        script = r"""
-$ErrorActionPreference='Stop'
-$tun=@(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' |
-  Where-Object {$_.State -eq 'Alive' -and $_.InterfaceAlias -match '(?i)tun'})
-if($tun.Count -eq 0){ exit 0 }
-$physical=Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' |
-  Where-Object {$_.State -eq 'Alive' -and $_.NextHop -ne '0.0.0.0' -and $_.InterfaceAlias -notmatch '(?i)tun'} |
-  Sort-Object RouteMetric | Select-Object -First 1
-if(-not $physical){ throw '未找到 TUN 之外的物理默认路由' }
-[Console]::OutputEncoding=[Text.UTF8Encoding]::new()
-[pscustomobject]@{NextHop=$physical.NextHop;InterfaceIndex=$physical.InterfaceIndex} |
-  ConvertTo-Json -Compress
-"""
-        probe = self._powershell(script)
-        if probe.returncode != 0:
-            detail = probe.stderr.strip() or probe.stdout.strip()
-            raise RuntimeError(f"HY2 直出路由探测失败：{detail}")
-        if not probe.stdout.strip():
-            # No active TUN default route: normal OS routing is already direct.
-            return self
-        try:
-            route = json.loads(probe.stdout.strip())
-            gateway = str(route["NextHop"])
-            interface_index = int(route["InterfaceIndex"])
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"HY2 直出路由解析失败：{probe.stdout.strip()}") from exc
-
-        route_exe = shutil.which("route.exe") or str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "route.exe")
-        try:
-            for address in self.addresses:
-                existing = self._powershell(
-                    f"$route=Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '{address}/32' "
-                    "-ErrorAction SilentlyContinue | Select-Object -First 1; "
-                    "if($route){$route | ConvertTo-Json -Compress}else{'NONE'}"
-                )
-                if existing.returncode != 0 and existing.stdout.strip() != "NONE":
-                    raise RuntimeError(existing.stderr.strip() or "查询目标主机路由失败")
-                if existing.stdout.strip() and existing.stdout.strip() != "NONE":
-                    try:
-                        current = json.loads(existing.stdout.strip())
-                        current_if = int(current.get("InterfaceIndex", -1))
-                    except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                        raise RuntimeError(f"现有 HY2 目标路由解析失败：{existing.stdout.strip()}") from exc
-                    if current_if != interface_index:
-                        raise RuntimeError(
-                            f"HY2 目标 {address} 已经走非物理接口 {current_if}，未覆盖该路由"
-                        )
-                    continue
-                add = subprocess.run(
-                    [
-                        route_exe,
-                        "ADD",
-                        address,
-                        "MASK",
-                        "255.255.255.255",
-                        gateway,
-                        "METRIC",
-                        "1",
-                        "IF",
-                        str(interface_index),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=15,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                    check=False,
-                )
-                if add.returncode != 0:
-                    detail = add.stderr.strip() or add.stdout.strip()
-                    raise RuntimeError(f"添加 HY2 直出路由失败：{address}：{detail}")
-                self._added.append((address, gateway, interface_index))
-        except Exception:
-            self.__exit__(None, None, None)
-            raise
-        selector.log(
-            "HY2 测速已临时绕过 TUN："
-            + ", ".join(self.addresses)
-            + f" -> {gateway} (IF {interface_index})"
-        )
-        return self
-
-    def __exit__(self, *_: Any) -> None:
-        if os.name != "nt":
-            return
-        route_exe = shutil.which("route.exe") or str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "route.exe")
-        for address, gateway, interface_index in reversed(self._added):
-            try:
-                subprocess.run(
-                    [
-                        route_exe,
-                        "DELETE",
-                        address,
-                        "MASK",
-                        "255.255.255.255",
-                        gateway,
-                        "IF",
-                        str(interface_index),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=15,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                    check=False,
-                )
-            except OSError as exc:
-                selector.log(f"HY2 直出临时路由清理失败：{address}：{exc}")
-        self._added.clear()
-
-
 def _windows_physical_default_interface_index() -> int | None:
     """Return the active non-TUN IPv4 default-route interface on Windows."""
 
@@ -1340,7 +849,7 @@ if(-not $physical){ throw '未找到 TUN 之外的物理默认路由' }
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new()
 $physical.InterfaceIndex
 """
-    probe = _WindowsHy2RouteBypass._powershell(script)
+    probe = _run_powershell(script)
     if probe.returncode != 0:
         detail = probe.stderr.strip() or probe.stdout.strip()
         raise RuntimeError(f"TCP 初筛物理接口探测失败：{detail}")
@@ -1353,93 +862,6 @@ $physical.InterfaceIndex
     if interface_index <= 0:
         raise RuntimeError(f"TCP 初筛物理接口无效：{interface_index}")
     return interface_index
-
-
-class HysteriaFallback:
-    def __init__(self, settings: dict[str, Any], socks_port: int, http_port: int):
-        self.settings = settings
-        self.socks_port = socks_port
-        self.http_port = http_port
-        self.temp_dir: tempfile.TemporaryDirectory[str] | None = None
-        self.process: subprocess.Popen[str] | None = None
-        self.log_handle: Any | None = None
-        self.keep_running = False
-        self.route_bypass: _WindowsHy2RouteBypass | None = None
-        self.display_name = "HY2"
-
-    def __enter__(self) -> "HysteriaFallback":
-        try:
-            RUNTIME_ROOT.mkdir(parents=True, exist_ok=True)
-            paths = _v2rayn_paths(self.settings)
-            source = _hy2_source_config(self.settings)
-            text = source.read_text(encoding="utf-8-sig")
-            self.display_name = _hy2_display_name(text)
-            self.route_bypass = _WindowsHy2RouteBypass(_hy2_server_ipv4s(text))
-            self.route_bypass.__enter__()
-            self.temp_dir = tempfile.TemporaryDirectory(prefix="ccd-hy2-", dir=RUNTIME_ROOT)
-            root = Path(self.temp_dir.name)
-            (root / "config.json").write_text(
-                _rewrite_hy2_inbounds(text, self.socks_port, self.http_port),
-                encoding="utf-8",
-            )
-            self.log_handle = (root / "hysteria.log").open("a", encoding="utf-8")
-            self.process = subprocess.Popen(
-                [str(paths["hysteria"])],
-                cwd=str(root),
-                stdout=self.log_handle,
-                stderr=subprocess.STDOUT,
-                text=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline:
-                if self.process.poll() is not None:
-                    raise RuntimeError("HY2 保底客户端提前退出")
-                if _port_open(self.http_port):
-                    result = selector.speed_test(
-                        selector.find_curl(),
-                        f"http://127.0.0.1:{self.http_port}",
-                        _speed_url(self.settings, "health"),
-                        64_000,
-                        12,
-                    )
-                    if result.get("ok"):
-                        return self
-                time.sleep(0.25)
-            raise RuntimeError("HY2 保底链路未通过真实下载验证")
-        except Exception:
-            # Startup failures used to leave a hysteria process and a locked
-            # temporary log behind, making the next scan look like a speed or
-            # port problem.  Tear down the partial context before propagating.
-            self.__exit__(None, None, None)
-            raise
-
-    def __exit__(self, *_: Any) -> None:
-        if self.keep_running:
-            # The verified fallback is intentionally handed over for manual
-            # recovery.  Detach TemporaryDirectory's finalizer so interpreter
-            # shutdown does not try to delete the live client's config/log.
-            if self.log_handle is not None:
-                self.log_handle.close()
-                self.log_handle = None
-            if self.temp_dir is not None:
-                self.temp_dir._finalizer.detach()  # type: ignore[attr-defined]
-            return
-        try:
-            if self.process is not None and self.process.poll() is None:
-                self.process.terminate()
-                try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.process.kill()
-                    self.process.wait(timeout=5)
-        finally:
-            if self.log_handle is not None:
-                self.log_handle.close()
-            if self.temp_dir is not None:
-                self.temp_dir.cleanup()
-            if self.route_bypass is not None:
-                self.route_bypass.__exit__(None, None, None)
 
 
 def _database_backup(connection: sqlite3.Connection, target: Path) -> None:
@@ -1692,12 +1114,9 @@ def _configured_index_id(settings: dict[str, Any]) -> str:
 
 
 def _active_slot_ids(settings: dict[str, Any]) -> dict[str, str]:
-    raw = settings.get("v2rayn_active_slot_ids")
-    configured = raw if isinstance(raw, dict) else {}
-    legacy_la = str(settings.get("v2rayn_active_slot_id", "")).strip()
+    configured = str(settings.get("v2rayn_active_slot_id", "")).strip()
     return {
-        "la": str(configured.get("la") or legacy_la or _stable_id("v2rayn-active-slot", "la")),
-        "sg": str(configured.get("sg") or _stable_id("v2rayn-active-slot", "sg")),
+        AUTO_MODE: configured or _stable_id("v2rayn-active-slot", AUTO_MODE),
     }
 
 
@@ -1753,14 +1172,10 @@ def _write_profile_dict(
 
 
 def _profile_allowed_for_mode(profile: dict[str, Any], mode: str) -> bool:
+    if mode != AUTO_MODE:
+        return False
     remarks = str(profile.get("Remarks") or "")
-    if mode == "la":
-        return (
-            remarks.startswith("LA-A |")
-            or remarks.startswith("LA-VLESS-A |")
-            or (int(profile.get("ConfigType") or 0) == 7 and not remarks.startswith("AUTO-"))
-        )
-    return remarks.startswith("SG-A |")
+    return remarks.startswith("CF-A |")
 
 
 def _same_profile_payload(left: dict[str, Any], right: dict[str, Any]) -> bool:
@@ -1802,23 +1217,16 @@ def _initial_target_profile(
             candidates.append(profile)
     if not candidates:
         raise RuntimeError(f"没有可用于 AUTO-{mode.upper()} 的初始节点")
-    if mode == "la":
-        candidates.sort(
-            key=lambda row: (
-                0 if str(row.get("Remarks") or "").startswith("LA-A |") else 1,
-                str(row.get("Remarks") or ""),
-            )
-        )
+    candidates.sort(key=lambda row: str(row.get("Remarks") or ""))
     return candidates[0]
 
 
 def _ensure_auto_slots(settings: dict[str, Any]) -> dict[str, str]:
-    """Create two independent hot-reload slots without touching the live core."""
+    """Create the generic hot-reload slot without touching the live core."""
 
     paths = _v2rayn_paths(settings)
     slot_ids = _active_slot_ids(settings)
     group_specs = _auto_group_specs()
-    legacy_auto_sub_id = _stable_id("v2rayn-pool", "auto-modes")
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(paths["db"], timeout=30) as connection:
         connection.execute("PRAGMA busy_timeout=30000")
@@ -1900,15 +1308,6 @@ def _ensure_auto_slots(settings: dict[str, Any]) -> dict[str, str]:
                         "target_remarks": target_remarks,
                         "needs_reload": needs_reload,
                     },
-                )
-            legacy_profile_count = connection.execute(
-                "SELECT COUNT(*) FROM ProfileItem WHERE Subid=?",
-                (legacy_auto_sub_id,),
-            ).fetchone()[0]
-            if not legacy_profile_count:
-                connection.execute(
-                    "DELETE FROM SubItem WHERE Id=?",
-                    (legacy_auto_sub_id,),
                 )
     return slot_ids
 
@@ -2306,22 +1705,6 @@ def _profile_display_name(settings: dict[str, Any], index_id: str) -> str:
     return str(row[0] or row[1] or index_id)
 
 
-def _hy2_profile_id(settings: dict[str, Any]) -> str:
-    paths = _v2rayn_paths(settings)
-    with sqlite3.connect(paths["db"]) as connection:
-        row = connection.execute(
-            """
-            SELECT IndexId FROM ProfileItem
-            WHERE CoreType=26 OR ConfigType=7
-            ORDER BY CASE WHEN Remarks='hy2' THEN 0 ELSE 1 END, rowid
-            LIMIT 1
-            """
-        ).fetchone()
-    if not row:
-        raise RuntimeError("v2rayN 数据库中没有可切换的 HY2 配置")
-    return str(row[0])
-
-
 def _candidate_profile_id(pool: str, ip: str) -> str:
     return _stable_id(f"v2rayn-{pool}", ip)
 
@@ -2411,7 +1794,7 @@ def _diagnose(settings: dict[str, Any]) -> int:
         if not paths[name].is_file():
             issues.append(f"缺少 {name}：{paths[name]}")
     try:
-        pools = _load_pools(settings, recover_sg=False)
+        pools = _load_pools(settings)
     except Exception as exc:
         pools = []
         issues.append(str(exc))
@@ -2463,9 +1846,8 @@ def _diagnose(settings: dict[str, Any]) -> int:
     print("活动槽 ID：", configured_id or "未知")
     print("当前自动模式：", selected_mode.upper() if selected_mode else "未选择")
     if auto_switch_idle:
-        print("自动切换状态：已待命；选择 AUTO-LA 或 AUTO-SG 后才接管对应组")
-    print("AUTO-LA ID：", slot_ids["la"])
-    print("AUTO-SG ID：", slot_ids["sg"])
+        print("自动切换状态：已待命；选择 AUTO-CF 后才接管自动优选")
+    print("AUTO-CF ID：", slot_ids[AUTO_MODE])
     print(
         "持久分流：",
         f"{active_routing_name}（{active_routing_rule_count} 条）",
@@ -2481,8 +1863,6 @@ def _diagnose(settings: dict[str, Any]) -> int:
     print("原生 Xray VMess 节点数：", native_count)
     print("原生 Xray VLESS 节点数：", vless_count)
     print("优选池：", ", ".join(pool.label for pool in pools) or "无")
-    print("SG 运行时模板：", "已恢复" if SG_TEMPLATE_PATH.is_file() else "未恢复")
-    print("LA VLESS 运行时模板：", "已恢复" if LA_VLESS_TEMPLATE_PATH.is_file() else "未恢复")
     if issues:
         for issue in issues:
             print("诊断失败：", issue)
@@ -2519,18 +1899,24 @@ def _quick_settings(settings: dict[str, Any]) -> dict[str, Any]:
 def _formal_xray_candidate_limit(
     configured_total: int,
     pool_count: int,
-    include_hy2: bool,
 ) -> int:
-    """Keep HY2 inside the configured formal-candidate budget.
-
-    Every selected Xray protocol pool still receives at least one slot.  The
-    currently active node may be appended separately for same-round comparison.
-    """
+    """Give every configured public template pool at least one formal slot."""
 
     pool_count = max(1, int(pool_count))
-    fixed_count = 1 if include_hy2 else 0
-    total_limit = max(pool_count + fixed_count, int(configured_total))
-    return max(pool_count, total_limit - fixed_count)
+    return max(pool_count, int(configured_total))
+
+
+def _run_powershell(script: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=15,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        check=False,
+    )
 
 
 def _tcp_failure_summary(rows: list[dict[str, Any]], limit: int = 3) -> str:
@@ -2624,23 +2010,15 @@ def run(args: Any, settings: dict[str, Any]) -> int:
     run_started = time.monotonic()
     run_started_at = selector.now_iso()
     quick = bool(getattr(args, "quick", False))
-    if bool(getattr(args, "restore_sg", False)):
-        result = restore_sg_runtime(settings)
-        print(f"SG 已恢复：{result['active_count']} 个正式节点")
-        return 0
-    if bool(getattr(args, "restore_vless", False)):
-        result = restore_vless_runtime(settings)
-        print(f"LA VLESS 已恢复：{result['active_count']} 个正式节点")
-        return 0
     if bool(getattr(args, "setup_v2rayn_auto", False)):
-        pools = _load_pools(settings, recover_sg=True)
+        pools = _load_pools(settings)
         active = _load_active_state(settings)
         db_result = _upsert_v2rayn_profiles(settings, pools, active, {})
         slots = _ensure_auto_slots(settings)
         routing = _ensure_full_routing(settings)
         print(
-            "AUTO-LA/AUTO-SG 已写入 v2rayN 数据库（未重载核心）："
-            f"LA={slots['la']}，SG={slots['sg']}；备份={db_result['backup']}"
+            "AUTO-CF 已写入 v2rayN 数据库（未重载核心）："
+            f"ID={slots[AUTO_MODE]}；备份={db_result['backup']}"
         )
         print(
             "全覆盖分流已写入 v2rayN 数据库（未重载核心）："
@@ -2686,22 +2064,13 @@ def run(args: Any, settings: dict[str, Any]) -> int:
 
     try:
         selected_mode = _selected_auto_mode(run_settings)
-        all_pools = _load_pools(run_settings, recover_sg=True)
-        if selected_mode == "la":
-            pools = [pool for pool in all_pools if pool.key in {"la", "la-vless"}]
-        elif selected_mode == "sg":
-            pools = [pool for pool in all_pools if pool.key == "sg"]
-        else:
-            pools = all_pools
-            selector.log("当前未选择 AUTO-LA/AUTO-SG：本轮只更新节点库，不自动切换")
+        pools = _load_pools(run_settings)
+        if selected_mode is None:
+            selector.log("当前未选择 AUTO-CF：本轮只更新节点库，不自动切换")
         if not pools:
             raise RuntimeError(f"自动模式 {selected_mode or 'none'} 没有可用优选池")
         active = _load_active_state(run_settings)
         current_id = _current_index_id(run_settings, selected_mode)
-        include_hy2 = (
-            selected_mode == "la"
-            and _hy2_comparison_enabled(run_settings)
-        )
         ranges = selector.load_official_ranges(run_settings)
         rng = random.Random()
         candidates, fixed, neighbor_count, fresh, reused = _generate_candidates(
@@ -2803,7 +2172,6 @@ def run(args: Any, settings: dict[str, Any]) -> int:
             formal_limit = _formal_xray_candidate_limit(
                 int(run_settings.get("speed_candidates", 20)),
                 len(pools),
-                include_hy2,
             )
             formal_keys: list[str] = []
             for pool in pools:
@@ -2841,131 +2209,76 @@ def run(args: Any, settings: dict[str, Any]) -> int:
             if not formal_keys:
                 raise RuntimeError("原生 Xray 速度粗测没有候选通过")
 
-            hy2_context: HysteriaFallback | contextlib.AbstractContextManager[Any]
-            if include_hy2:
-                hy2_context = HysteriaFallback(
-                    run_settings,
-                    int(run_settings.get("v2rayn_scan_hy2_socks_port", 10822)),
-                    int(run_settings.get("v2rayn_scan_hy2_http_port", 10823)),
-                )
-            else:
-                hy2_context = contextlib.nullcontext(None)
+            proxy_urls = {
+                key: f"http://127.0.0.1:{batch.proxies[key].port}"
+                for key in formal_keys
+            }
+            warmed: set[str] = set()
 
-            with hy2_context as hy2:
-                proxy_urls = {
-                    key: f"http://127.0.0.1:{batch.proxies[key].port}"
-                    for key in formal_keys
-                }
-                if hy2 is not None:
-                    hy2_key = "fixed:hy2"
-                    proxy_urls[hy2_key] = f"http://127.0.0.1:{hy2.http_port}"
-                    hy2_delay_values = [
-                        value
-                        for value in (
-                            _curl_delay(
-                                curl_bin,
-                                proxy_urls[hy2_key],
-                                str(run_settings.get("delay_test_url")),
-                                int(run_settings.get("delay_timeout_ms", 7000)),
-                            )
-                            for _ in range(max(1, int(run_settings.get("delay_repeats", 3))))
-                        )
-                        if value is not None
-                    ]
-                    required_hy2_delays = max(
-                        1, int(run_settings.get("delay_repeats", 3))
-                    )
-                    if (
-                        len(hy2_delay_values) >= required_hy2_delays
-                        or (
-                            not bool(run_settings.get("require_all_repeats", True))
-                            and len(hy2_delay_values) >= max(1, required_hy2_delays - 1)
-                        )
-                    ):
-                        delays[hy2_key] = round(statistics.fmean(hy2_delay_values), 2)
-                        delay_samples[hy2_key] = hy2_delay_values
-                        delay_stddev[hy2_key] = (
-                            round(statistics.pstdev(hy2_delay_values), 2)
-                            if len(hy2_delay_values) > 1
-                            else 0.0
-                        )
-                        formal_keys.append(hy2_key)
-
-                warmed: set[str] = set()
-
-                def run_one(key: str, _: int) -> dict[str, Any]:
-                    if key not in warmed and bool(run_settings.get("speed_warmup_enabled", True)):
-                        selector.warmup_speed_test(
-                            curl_bin,
-                            proxy_urls[key],
-                            _speed_url(run_settings, "probe"),
-                            int(run_settings.get("speed_warmup_bytes", 131_072)),
-                            float(run_settings.get("speed_warmup_timeout_seconds", 8)),
-                            progress_prefix=f"{key} ",
-                        )
-                        warmed.add(key)
-                    return selector.parallel_speed_test(
+            def run_one(key: str, _: int) -> dict[str, Any]:
+                if key not in warmed and bool(run_settings.get("speed_warmup_enabled", True)):
+                    selector.warmup_speed_test(
                         curl_bin,
                         proxy_urls[key],
-                        _speed_url(run_settings, "formal"),
-                        int(run_settings["speed_test_bytes"]),
-                        float(run_settings["speed_timeout_seconds"]),
-                        int(run_settings.get("v2rayn_speed_concurrency", 5)),
-                        int(run_settings.get("v2rayn_speed_stream_bytes", 4_000_000)),
+                        _speed_url(run_settings, "probe"),
+                        int(run_settings.get("speed_warmup_bytes", 131_072)),
+                        float(run_settings.get("speed_warmup_timeout_seconds", 8)),
+                        progress_prefix=f"{key} ",
                     )
-
-                results = selector.interleaved_speed_tests(
-                    formal_keys,
-                    run_one,
-                    int(run_settings.get("speed_repeats", 3)),
-                    float(run_settings.get("speed_repeat_interval_seconds", 0.5)),
-                    bool(run_settings.get("require_all_repeats", True)),
-                    rng,
+                    warmed.add(key)
+                return selector.parallel_speed_test(
+                    curl_bin,
+                    proxy_urls[key],
+                    _speed_url(run_settings, "formal"),
+                    int(run_settings["speed_test_bytes"]),
+                    float(run_settings["speed_timeout_seconds"]),
+                    int(run_settings.get("v2rayn_speed_concurrency", 5)),
+                    int(run_settings.get("v2rayn_speed_stream_bytes", 4_000_000)),
                 )
-                maximum_cv = float(run_settings.get("maximum_speed_cv", 0.45))
-                for key in formal_keys:
-                    result = results[key]
-                    stable = bool(result.get("ok")) and float(result.get("speed_cv", 0)) <= maximum_cv
-                    if key == "fixed:hy2":
-                        pool_key = "hy2"
-                        name = hy2.display_name if hy2 is not None else "HY2"
-                        ip = name
-                        profile_id = _hy2_profile_id(run_settings)
-                    else:
-                        proxy = batch.proxies[key]
-                        pool_key = proxy.pool
-                        ip = proxy.ip
-                        name = proxy.name
-                        profile_id = _candidate_profile_id(proxy.pool, proxy.ip)
-                    row = {
-                        "time": selector.now_iso(),
-                        "ip": ip,
-                        "discovery_node": name,
-                        "selection_name": name,
-                        "candidate_id": key,
-                        "candidate_key": key,
-                        "candidate_type": (
-                            "fixed_proxy"
-                            if pool_key == "hy2"
-                            else str(batch.proxies[key].template.get("type") or "vmess").lower()
-                        ),
-                        "pool": pool_key,
-                        "profile_id": profile_id,
-                        "delay_ms": delays.get(key, 1e9),
-                        "delay_samples_ms": ",".join(
-                            f"{value:.2f}" for value in delay_samples.get(key, [])
-                        ),
-                        "delay_stddev_ms": delay_stddev.get(key, 0),
-                        **result,
-                        "speed_stable": stable,
-                        "speed_ok": bool(result.get("ok")) and stable,
-                    }
-                    if result.get("ok") and not stable:
-                        row["error"] = (
-                            f"三次速度波动过大：CV={float(result.get('speed_cv', 0)):.1%}"
-                        )
-                    all_rows.append(row)
-                    metrics[key] = row
+
+            results = selector.interleaved_speed_tests(
+                formal_keys,
+                run_one,
+                int(run_settings.get("speed_repeats", 3)),
+                float(run_settings.get("speed_repeat_interval_seconds", 0.5)),
+                bool(run_settings.get("require_all_repeats", True)),
+                rng,
+            )
+            maximum_cv = float(run_settings.get("maximum_speed_cv", 0.45))
+            for key in formal_keys:
+                result = results[key]
+                stable = (
+                    bool(result.get("ok"))
+                    and float(result.get("speed_cv", 0)) <= maximum_cv
+                )
+                proxy = batch.proxies[key]
+                row = {
+                    "time": selector.now_iso(),
+                    "ip": proxy.ip,
+                    "discovery_node": proxy.name,
+                    "selection_name": proxy.name,
+                    "candidate_id": key,
+                    "candidate_key": key,
+                    "candidate_type": str(
+                        proxy.template.get("type") or "vmess"
+                    ).lower(),
+                    "pool": proxy.pool,
+                    "profile_id": _candidate_profile_id(proxy.pool, proxy.ip),
+                    "delay_ms": delays.get(key, 1e9),
+                    "delay_samples_ms": ",".join(
+                        f"{value:.2f}" for value in delay_samples.get(key, [])
+                    ),
+                    "delay_stddev_ms": delay_stddev.get(key, 0),
+                    **result,
+                    "speed_stable": stable,
+                    "speed_ok": bool(result.get("ok")) and stable,
+                }
+                if result.get("ok") and not stable:
+                    row["error"] = (
+                        f"三次速度波动过大：CV={float(result.get('speed_cv', 0)):.1%}"
+                    )
+                all_rows.append(row)
+                metrics[key] = row
 
         finish_stage("formal_speed")
 
@@ -3025,7 +2338,7 @@ def run(args: Any, settings: dict[str, Any]) -> int:
         )
         if selected_mode is None:
             target_id = current_id
-            reason = "当前未选择 AUTO-LA 或 AUTO-SG；已更新节点库但未自动切换"
+            reason = "当前未选择 AUTO-CF；已更新节点库但未自动切换"
         else:
             target_id, reason = _choose_switch(
                 run_settings, ranked, current_id, selected_mode
@@ -3130,8 +2443,7 @@ def run(args: Any, settings: dict[str, Any]) -> int:
             "formal_failed_count": len(failed_rows),
             "formal_not_selected_count": max(
                 0,
-                len(passed)
-                - sum(1 for key in formal_keys if key != "fixed:hy2"),
+                len(passed) - len(formal_keys),
             ),
             "fast_group_count": sum(
                 1 for row in ranked if row.get("fast_group")
@@ -3149,7 +2461,7 @@ def run(args: Any, settings: dict[str, Any]) -> int:
             ),
             "timeout_count_total": sum(timeout_counts.values()),
             "active_pool_size": current_pool_size,
-            "fixed_proxy_count": 1 if include_hy2 else 0,
+            "fixed_proxy_count": 0,
             "new_active_count": new_active_count,
             "pool_size_delta": current_pool_size - previous_pool_size,
             "deferred_count": 0,

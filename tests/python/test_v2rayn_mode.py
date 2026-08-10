@@ -23,23 +23,14 @@ class V2rayNPathTests(unittest.TestCase):
 
         self.assertEqual(root, Path(temp_dir).resolve())
 
-    def test_hysteria_core_is_required_only_when_comparison_is_enabled(self):
-        self.assertIs(v2rayn_mode._hy2_comparison_enabled({}), False)
-        self.assertIs(
-            v2rayn_mode._hy2_comparison_enabled(
-                {"v2rayn_compare_hy2": True}
-            ),
-            True,
-        )
+    def test_public_backend_requires_only_v2rayn_xray_files(self):
         self.assertEqual(
             v2rayn_mode._required_core_names({}),
             ("db", "config", "xray"),
         )
         self.assertEqual(
-            v2rayn_mode._required_core_names(
-                {"v2rayn_compare_hy2": True}, include_desktop=True
-            ),
-            ("exe", "db", "config", "xray", "hysteria"),
+            v2rayn_mode._required_core_names({}, include_desktop=True),
+            ("exe", "db", "config", "xray"),
         )
 
     def test_configured_proxy_must_be_loopback_and_keeps_custom_port(self):
@@ -56,15 +47,33 @@ class V2rayNPathTests(unittest.TestCase):
 
 
 class V2rayNConfigTests(unittest.TestCase):
-    def test_auto_groups_are_separate_and_stable(self):
+    def test_public_pool_is_neutral_and_uses_the_user_template(self):
+        template = {
+            "type": "vmess",
+            "uuid": "11111111-1111-4111-8111-111111111111",
+            "port": 443,
+            "servername": "edge.test.invalid",
+            "ws-opts": {"path": "/ws", "headers": {"Host": "edge.test.invalid"}},
+        }
+        with mock.patch.object(v2rayn_mode.selector, "load_template", return_value=template):
+            pools = v2rayn_mode._load_pools({})
+
+        self.assertEqual(len(pools), 1)
+        self.assertEqual(pools[0].key, "cf")
+        self.assertEqual(pools[0].active_prefix, "CF-A")
+        self.assertEqual(pools[0].discovery_prefix, "CF-D")
+        self.assertEqual(pools[0].label, "Cloudflare VMESS")
+        self.assertIs(pools[0].template, template)
+
+    def test_auto_group_is_generic_and_stable(self):
         first = v2rayn_mode._auto_group_specs()
         second = v2rayn_mode._auto_group_specs()
 
-        self.assertEqual(set(first), {"la", "sg"})
-        self.assertNotEqual(first["la"]["id"], first["sg"]["id"])
+        self.assertEqual(set(first), {"cf"})
         self.assertEqual(first, second)
-        self.assertIn("LA VMess + VLESS + HY2", first["la"]["remarks"])
-        self.assertIn("仅 SG VMess", first["sg"]["remarks"])
+        self.assertIn("AUTO-CF", first["cf"]["remarks"])
+        self.assertNotIn("LA", first["cf"]["remarks"])
+        self.assertNotIn("SG", first["cf"]["remarks"])
 
     def test_vmess_xray_outbound_preserves_ws_tls_and_replaces_only_address(self):
         outbound = v2rayn_mode._xray_outbound(
@@ -114,15 +123,6 @@ class V2rayNConfigTests(unittest.TestCase):
         self.assertEqual(quick["speed_test_bytes"], 3_000_000)
         self.assertEqual(quick["speed_timeout_seconds"], 20)
         self.assertEqual(settings["random_samples_per_run"], 5000)
-
-    def test_hy2_display_name_does_not_expose_server(self):
-        label = v2rayn_mode._hy2_display_name(
-            "server: private-gateway.test.invalid:24567\nauth: secret\n"
-        )
-
-        self.assertEqual(label, "HY2 | UDP 24567")
-        self.assertNotIn("private-gateway", label)
-
 
 class V2rayNDispatchTests(unittest.TestCase):
     def test_dynamic_selector_forwards_dry_run_flag_to_v2rayn_backend(self):
@@ -213,7 +213,7 @@ class V2rayNSwitchTests(unittest.TestCase):
             }
         ]
         with tempfile.TemporaryDirectory() as temp_dir:
-            state_path = Path(temp_dir) / "switch_state_la.json"
+            state_path = Path(temp_dir) / "switch_state_cf.json"
             with mock.patch.object(
                 v2rayn_mode,
                 "_switch_state_path",
@@ -223,10 +223,10 @@ class V2rayNSwitchTests(unittest.TestCase):
                     {"required_consecutive_wins": 1},
                     ranked,
                     "old-target",
-                    "la",
+                    "cf",
                 )
                 selected_state = json.loads(state_path.read_text(encoding="utf-8"))
-                v2rayn_mode._record_successful_switch("la", target_id)
+                v2rayn_mode._record_successful_switch("cf", target_id)
                 switched_state = json.loads(state_path.read_text(encoding="utf-8"))
 
         self.assertEqual(target_id, "new-target")
@@ -255,7 +255,7 @@ class V2rayNSwitchTests(unittest.TestCase):
             mock.patch.object(
                 v2rayn_mode,
                 "_ensure_auto_slots",
-                return_value={"la": "active-slot"},
+                return_value={"cf": "active-slot"},
             ),
             mock.patch.object(
                 v2rayn_mode,
@@ -283,7 +283,7 @@ class V2rayNSwitchTests(unittest.TestCase):
             mock.patch.object(v2rayn_mode, "_set_system_proxy"),
         ):
             with self.assertRaisesRegex(RuntimeError, "真实下载验证"):
-                v2rayn_mode._safe_activate(settings, "new-target", "la")
+                v2rayn_mode._safe_activate(settings, "new-target", "cf")
 
         self.assertEqual(proxy_checks.call_count, 2)
         self.assertEqual(
@@ -297,7 +297,7 @@ class V2rayNReportTests(unittest.TestCase):
         ranked = [
             {
                 "ip": "198.51.100.8",
-                "discovery_node": "LA VMess | 198.51.100.8",
+                "discovery_node": "Cloudflare VMess | 198.51.100.8",
                 "fast_group": True,
                 "speed_Mbps": 88.0,
                 "speed_samples_Mbps": "87,88,89",
@@ -313,7 +313,7 @@ class V2rayNReportTests(unittest.TestCase):
         summary = {
             "client_mode": "v2rayn",
             "summary_schema_version": 2,
-            "auto_mode": "la",
+            "auto_mode": "cf",
             "candidate_count": 20,
             "tcp_reachable_count": 15,
             "tcp_failed_count": 5,
@@ -332,8 +332,8 @@ class V2rayNReportTests(unittest.TestCase):
             "stage_durations_seconds": {"tcp_probe": 1.2, "proxy_delay": 2.3},
         }
         decision = {
-            "current_name_before": "AUTO-LA old",
-            "current_name_after": "AUTO-LA new",
+            "current_name_before": "AUTO-CF old",
+            "current_name_after": "AUTO-CF new",
             "switched": True,
             "best": ranked[0],
             "current_metrics": ranked[0],

@@ -142,9 +142,6 @@ function New-V2rayNSettings([string]$Root, [string]$ProxyUrl) {
     $Settings = Read-JsonObject (Join-Path $ExamplesRoot "settings.example.json")
     $Settings.client_mode = "v2rayn"
     $Settings.v2rayn_root = $Root
-    $Settings.v2rayn_enable_sg = $false
-    $Settings.v2rayn_enable_la_vless = $false
-    $Settings.v2rayn_compare_hy2 = $false
     $Settings.v2rayn_auto_switch = $true
     $Settings.controller = "http://127.0.0.1:9090"
     $Settings.secret = ""
@@ -314,7 +311,7 @@ try {
     Write-Host "已创建：$LightTask、$DeepTask、$HealthTask"
     Write-Host "请先启动 v2rayN，确认基础 VMess 节点可用，然后运行：" -ForegroundColor Yellow
     Write-Host "python `"$InstalledRoot\dynamic_selector.py`" --diagnose"
-    Write-Host "确认无误后运行 --setup-v2rayn-auto 建立 AUTO-LA。"
+    Write-Host "确认无误后运行 --setup-v2rayn-auto 建立通用 AUTO-CF。"
 } catch {
     $InstallError = $_.Exception.Message
     $RollbackErrors = New-Object System.Collections.Generic.List[string]

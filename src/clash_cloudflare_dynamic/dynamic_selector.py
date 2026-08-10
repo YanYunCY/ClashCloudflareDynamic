@@ -4035,19 +4035,9 @@ def main() -> int:
         help="v2rayN 模式只测试和排名，不写数据库也不切换",
     )
     parser.add_argument(
-        "--restore-sg",
-        action="store_true",
-        help="从配置的旧 provider 恢复 SG 模板和正式池",
-    )
-    parser.add_argument(
-        "--restore-vless",
-        action="store_true",
-        help="从配置的旧 Clash 文件恢复 LA VLESS 模板",
-    )
-    parser.add_argument(
         "--setup-v2rayn-auto",
         action="store_true",
-        help="创建 v2rayN AUTO-LA/AUTO-SG 槽，不重载核心",
+        help="创建通用 v2rayN AUTO-CF 槽，不重载核心",
     )
     args = parser.parse_args()
 

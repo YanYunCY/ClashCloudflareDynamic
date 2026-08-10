@@ -79,9 +79,16 @@ try {
     $Settings = [IO.File]::ReadAllText($SettingsPath) | ConvertFrom-Json
     $Template = [IO.File]::ReadAllText($TemplatePath) | ConvertFrom-Json
     Assert-Equal "v2rayn" $Settings.client_mode "client_mode 错误"
-    Assert-Equal $false $Settings.v2rayn_enable_sg "公开安装不应默认启用 SG"
-    Assert-Equal $false $Settings.v2rayn_enable_la_vless "公开安装不应默认启用 VLESS"
-    Assert-Equal $false $Settings.v2rayn_compare_hy2 "公开安装不应默认启用 HY2"
+    foreach ($PrivateTopologyKey in @(
+        "v2rayn_enable_sg",
+        "v2rayn_enable_la_vless",
+        "v2rayn_compare_hy2",
+        "v2rayn_active_slot_ids"
+    )) {
+        if ($Settings.PSObject.Properties.Name -contains $PrivateTopologyKey) {
+            throw "公开安装不应携带维护者私有拓扑字段：$PrivateTopologyKey"
+        }
+    }
     Assert-Equal "http://127.0.0.1:18080" $Settings.mixed_proxy "本地代理端口未保留"
     Assert-Equal "vmess" $Template.type "模板协议错误"
     Assert-Equal "edge.test.invalid" $Template.servername "SNI 未写入模板"
@@ -166,6 +173,17 @@ try {
     )) {
         if ($InstallerText -notlike "*$ConflictingTask*") {
             throw "v2rayN 安装器缺少历史冲突任务迁移：$ConflictingTask"
+        }
+    }
+    foreach ($PrivateMarker in @(
+        "AUTO-LA",
+        "AUTO-SG",
+        "e0a4ee22-c8d3-4975-a102-de1f410de7b3.yaml",
+        "v2rayn_sg_recovery_provider",
+        "v2rayn_la_vless_recovery_profile"
+    )) {
+        if ($InstallerText -like "*$PrivateMarker*") {
+            throw "v2rayN 安装器包含维护者私有拓扑标记：$PrivateMarker"
         }
     }
     foreach ($PrivateName in @("settings.json", "node_template.json")) {

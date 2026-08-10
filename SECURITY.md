@@ -49,9 +49,11 @@ The v2rayN installer reads the VMess UUID with masked console input and writes
 it directly to the current user's installed `node_template.json`; it does not
 write credentials into the extracted Release directory. The optional
 `-PrepareOnly` mode writes only to the explicitly supplied temporary target and
-returns before any Scheduled Task or v2rayN database mutation. SG, VLESS and
-HY2 are disabled in the public default and require user-owned local templates
-or profiles.
+returns before any Scheduled Task or v2rayN database mutation. The public
+v2rayN backend has one generic `AUTO-CF` slot and only generates the VMess
+template entered by the installing user; it does not infer, copy, or restore
+other protocols, regions, exits, or database slots from the maintainer's
+environment.
 
 Mihomo or Xray must read the installed node template and managed profiles, so credentials
 are necessarily stored in plaintext under the current user's LocalAppData and
