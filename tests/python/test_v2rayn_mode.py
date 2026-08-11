@@ -47,6 +47,83 @@ class V2rayNPathTests(unittest.TestCase):
 
 
 class V2rayNConfigTests(unittest.TestCase):
+    def test_active_route_detection_supports_sing_box_hy2_tun_config(self):
+        payload = {
+            "route": {
+                "rules": [
+                    {
+                        "action": "reject",
+                        "rule_set": ["geosite-category-ads-all"],
+                    },
+                    {
+                        "outbound": "direct",
+                        "domain_suffix": ["apps.microsoft.com"],
+                    },
+                    {
+                        "outbound": "proxy",
+                        "network": ["udp"],
+                        "port_range": ["19302:19309"],
+                    },
+                    {"outbound": "proxy", "port_range": ["0:65535"]},
+                ]
+            }
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_dir = root / "binConfigs"
+            config_dir.mkdir()
+            (config_dir / "config.json").write_text(
+                json.dumps(payload), encoding="utf-8"
+            )
+            with mock.patch.object(
+                v2rayn_mode,
+                "_v2rayn_paths",
+                return_value={"root": root},
+            ):
+                self.assertTrue(v2rayn_mode._generated_full_routing_is_active({}))
+                payload["route"]["rules"][1]["domain_suffix"] = []
+                (config_dir / "config.json").write_text(
+                    json.dumps(payload), encoding="utf-8"
+                )
+                self.assertFalse(v2rayn_mode._generated_full_routing_is_active({}))
+
+    def test_full_route_matches_clash_split_and_keeps_ordered_leak_protection(self):
+        rules = v2rayn_mode._full_routing_rules()
+        by_key = {
+            rule["Id"]: (index, rule)
+            for index, rule in enumerate(rules)
+        }
+
+        def named(key: str):
+            return by_key[v2rayn_mode._stable_id("v2rayn-routing-rule", key)]
+
+        webrtc_index, webrtc = named("webrtc-stun-proxy")
+        store_index, store = named("microsoft-store-direct")
+        global_index, microsoft_global = named("microsoft-global-proxy")
+        overseas_index, overseas = named("overseas-services")
+        china_ip_index, _ = named("china-ip")
+        dns_direct_index, _ = named("dns-direct-inbound")
+        final_index, final = named("overseas-final")
+
+        self.assertEqual(len(rules), 17)
+        self.assertEqual(webrtc["Network"], "udp")
+        self.assertEqual(webrtc["OutboundTag"], "proxy")
+        self.assertIn("19302-19309", webrtc["Port"])
+        self.assertEqual(store["OutboundTag"], "direct")
+        self.assertIn("domain:apps.microsoft.com", store["Domain"])
+        self.assertIn("domain:delivery.mp.microsoft.com", store["Domain"])
+        self.assertEqual(microsoft_global["OutboundTag"], "proxy")
+        self.assertIn("domain:login.microsoftonline.com", microsoft_global["Domain"])
+        self.assertIn("geosite:openai", overseas["Domain"])
+        self.assertIn("geosite:youtube", overseas["Domain"])
+        self.assertIn("geosite:github", overseas["Domain"])
+        self.assertEqual(final["Port"], "0-65535")
+        self.assertLess(webrtc_index, china_ip_index)
+        self.assertLess(store_index, china_ip_index)
+        self.assertLess(global_index, china_ip_index)
+        self.assertLess(overseas_index, china_ip_index)
+        self.assertLess(dns_direct_index, final_index)
+
     def test_public_pool_is_neutral_and_uses_the_user_template(self):
         template = {
             "type": "vmess",
@@ -123,6 +200,51 @@ class V2rayNConfigTests(unittest.TestCase):
         self.assertEqual(quick["speed_test_bytes"], 3_000_000)
         self.assertEqual(quick["speed_timeout_seconds"], 20)
         self.assertEqual(settings["random_samples_per_run"], 5000)
+
+
+class V2rayNDelayTests(unittest.TestCase):
+    def test_empty_delay_round_retries_at_lower_concurrency(self):
+        proxies = {
+            str(index): v2rayn_mode.CandidateProxy(
+                key=str(index),
+                pool="cf",
+                ip=f"198.51.100.{index + 1}",
+                name=f"candidate-{index}",
+                port=18000 + index,
+                template={},
+            )
+            for index in range(4)
+        }
+        calls = 0
+
+        def fake_delay(*_args):
+            nonlocal calls
+            calls += 1
+            return None if calls <= len(proxies) else 12.5
+
+        with (
+            mock.patch.object(v2rayn_mode, "_curl_delay", side_effect=fake_delay),
+            mock.patch.object(v2rayn_mode.time, "sleep"),
+            mock.patch.object(v2rayn_mode.selector, "log"),
+        ):
+            valid, samples, stddev = v2rayn_mode._measure_delays(
+                proxies,
+                {
+                    "delay_repeats": 3,
+                    "require_all_repeats": True,
+                    "v2rayn_delay_workers": 4,
+                    "v2rayn_delay_retry_on_empty": True,
+                    "v2rayn_delay_retry_min_valid_ratio": 0.05,
+                    "v2rayn_delay_retry_workers": 2,
+                    "v2rayn_delay_retry_backoff_seconds": 2.0,
+                },
+                "curl.exe",
+            )
+
+        self.assertEqual(set(valid), set(proxies))
+        self.assertEqual(calls, len(proxies) * 4)
+        self.assertEqual(samples["0"], [12.5, 12.5, 12.5])
+        self.assertEqual(stddev["0"], 0.0)
 
 class V2rayNDispatchTests(unittest.TestCase):
     def test_dynamic_selector_forwards_dry_run_flag_to_v2rayn_backend(self):
@@ -203,6 +325,22 @@ class V2rayNDispatchTests(unittest.TestCase):
 
 
 class V2rayNSwitchTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows-only reload bridge")
+    def test_reload_uses_single_instance_event_for_hidden_tray_window(self):
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(
+            v2rayn_mode.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            v2rayn_mode._invoke_v2rayn_reload(Path(r"C:\v2rayN\v2rayN.exe"))
+
+        script = run.call_args.args[0][-1]
+        self.assertIn("EventWaitHandle]::OpenExisting", script)
+        self.assertIn("CcdV2rayNWindowBridge]::FindMain", script)
+        self.assertIn("'menuReload'", script)
+        self.assertIn("PostMessage($hwnd,0x0010", script)
+
     def test_switch_timestamp_is_recorded_only_after_activation_succeeds(self):
         ranked = [
             {

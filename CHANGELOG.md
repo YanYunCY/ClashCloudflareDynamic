@@ -2,6 +2,14 @@
 
 全部安装包和 GitHub 自动生成的源码归档见 [Releases 列表](https://github.com/YanYunCY/ClashCloudflareDynamic/releases)。
 
+## [v1.5.2](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.5.2) — 2026-08-11
+
+- 修复轻扫短样本测速虚高：VMess、VLESS 和 HY2 的单流与并发测速统一按完整请求墙钟耗时写入 `speed_Mbps`，粗测排序、三轮平均、95% 高速组、历史信誉和自动切换只使用该字段；
+- 扣除 TTFB 的响应体速率改名为 `payload_speed_Mbps`，仅作为“短传输峰值”写入日志、CSV 和 HTML 诊断报告，不再参与任何选择决策；
+- 静态测速文件使用精确 HTTP Range，防止并发子流忽略 `?bytes=` 后放大轻扫流量；新增单流、并发墙钟口径、排名隔离、报告标签和静态 Range 回归测试；
+- 完善通用 v2rayN 分流：补齐 Microsoft Store/Windows Update 直连、Microsoft 登录与常见国外服务代理、DNS 规则顺序、WebRTC/STUN UDP 防泄漏和最终国外兜底，并同时校验 Xray 与 sing-box/HY2 的运行配置；
+- 修复 v2rayN 隐藏到托盘后自动切换可能找不到 Reload 控件或短暂弹窗的问题；计划任务显式使用当前交互用户的最高权限主体，真实协议延迟全空时降低并发重试一次。
+
 ## [v1.5.1](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.5.1) — 2026-08-10
 
 - 修正公开 v2rayN/Xray 安装模型：只生成安装用户自行填写的通用 VMess/WS/TLS 模板，并使用单一 `AUTO-CF` 活动槽；不再携带维护者地区分组、恢复文件、固定槽位或其他本机拓扑字段；

@@ -175,6 +175,10 @@ try {
             throw "v2rayN 安装器缺少历史冲突任务迁移：$ConflictingTask"
         }
     }
+    if ($InstallerText -notlike "*New-V2rayNTaskPrincipal*" -or
+        $InstallerText -notlike "*-Principal $V2rayNPrincipal*") {
+        throw "v2rayN 扫描任务未显式使用当前用户的 Highest 权限主体"
+    }
     foreach ($PrivateMarker in @(
         "AUTO-LA",
         "AUTO-SG",

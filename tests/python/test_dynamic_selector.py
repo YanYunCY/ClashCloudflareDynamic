@@ -39,6 +39,56 @@ class StageTimerTests(unittest.TestCase):
         self.assertEqual(durations["tcp_probe"], 3.3)
 
 
+class ParallelSpeedTestTests(unittest.TestCase):
+    @mock.patch.object(
+        selector,
+        "speed_test",
+        side_effect=[
+            {
+                "ok": True,
+                "http_code": 200,
+                "size_download": 5_000_000,
+                "speed_Mbps": 10.0,
+                "connection_average_speed_Mbps": 9.0,
+                "ttfb_ms": 100.0,
+            },
+            {
+                "ok": True,
+                "http_code": 200,
+                "size_download": 5_000_000,
+                "speed_Mbps": 11.0,
+                "connection_average_speed_Mbps": 10.0,
+                "ttfb_ms": 120.0,
+            },
+        ],
+    )
+    def test_parallel_speed_uses_full_wall_time_and_keeps_peak_diagnostic(
+        self, speed_test_mock
+    ):
+        with mock.patch.object(
+            selector.time,
+            "perf_counter",
+            side_effect=[10.0, 12.0],
+        ):
+            result = selector.parallel_speed_test(
+                "curl",
+                "http://127.0.0.1:1",
+                "https://example.invalid/file",
+                10_000_000,
+                10,
+                2,
+                5_000_000,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["parallel_concurrency"], 2)
+        self.assertEqual(result["parallel_stream_bytes"], 5_000_000)
+        self.assertEqual(result["size_download"], 10_000_000)
+        self.assertEqual(result["speed_Mbps"], 40.0)
+        self.assertEqual(result["payload_speed_Mbps"], 42.11)
+        self.assertEqual(speed_test_mock.call_count, 2)
+
+
 class DeepScanMarkerTests(unittest.TestCase):
     def test_deep_marker_blocks_light_scan_while_owner_is_alive(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -929,7 +979,8 @@ class SpeedJsonTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn("speed_Mbps", result)
         self.assertIn("speed_MB_per_s", result)
-        self.assertEqual(result["speed_Mbps"], 8.89)
+        self.assertEqual(result["speed_Mbps"], 8.0)
+        self.assertEqual(result["payload_speed_Mbps"], 8.89)
         self.assertEqual(result["connection_average_speed_Mbps"], 4.0)
         self.assertNotIn("speed_MBps", result)
         self.assertEqual(
@@ -949,6 +1000,61 @@ class SpeedJsonTests(unittest.TestCase):
             selector.save_json_atomic(output, {"best": result})
             payload = selector.load_json(output, {})
             self.assertNotIn("speed_MBps", payload["best"])
+
+    @mock.patch.object(selector.subprocess, "run")
+    def test_speed_static_file_uses_exact_http_range(self, run):
+        run.return_value = mock.Mock(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps(
+                {
+                    "http_code": 206,
+                    "time_starttransfer": 0.1,
+                    "time_total": 1.0,
+                    "size_download": 4_000_000,
+                    "speed_download": 4_000_000,
+                }
+            ),
+        )
+
+        result = selector.speed_test(
+            "curl",
+            "http://127.0.0.1:7890",
+            "https://example.test/ccd-speed-20MiB.bin",
+            4_000_000,
+            5,
+        )
+
+        self.assertTrue(result["ok"])
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--range") + 1], "0-3999999")
+
+    @mock.patch.object(selector.subprocess, "run")
+    def test_generated_endpoint_does_not_force_http_range(self, run):
+        run.return_value = mock.Mock(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps(
+                {
+                    "http_code": 200,
+                    "time_starttransfer": 0.1,
+                    "time_total": 1.0,
+                    "size_download": 1_000_000,
+                    "speed_download": 1_000_000,
+                }
+            ),
+        )
+
+        result = selector.speed_test(
+            "curl",
+            "http://127.0.0.1:7890",
+            "https://speed.cloudflare.com/__down",
+            1_000_000,
+            5,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertNotIn("--range", run.call_args.args[0])
 
     @mock.patch.object(selector.subprocess, "run")
     def test_speed_json_rejects_short_response(self, run):
@@ -1195,6 +1301,30 @@ class RankingTests(unittest.TestCase):
         self.assertEqual([row["ip"] for row in ranked], ["2.2.2.2", "1.1.1.1", "3.3.3.3"])
         self.assertTrue(ranked[0]["fast_group"])
         self.assertFalse(ranked[-1]["fast_group"])
+
+    def test_payload_peak_never_controls_ranking(self):
+        rows = [
+            {
+                "ip": "1.1.1.1",
+                "speed_ok": True,
+                "speed_Mbps": 20,
+                "payload_speed_Mbps": 21,
+                "delay_ms": 150,
+            },
+            {
+                "ip": "2.2.2.2",
+                "speed_ok": True,
+                "speed_Mbps": 10,
+                "payload_speed_Mbps": 100,
+                "delay_ms": 80,
+            },
+        ]
+
+        ranked = selector.rank_rows(rows, 0.95)
+
+        self.assertEqual(ranked[0]["ip"], "1.1.1.1")
+        self.assertTrue(ranked[0]["fast_group"])
+        self.assertFalse(ranked[1]["fast_group"])
 
     def test_fast_speed_ratio_is_normalized_consistently(self):
         self.assertEqual(selector.normalize_fast_speed_ratio(2), 1.0)
@@ -2217,6 +2347,7 @@ class NotificationTests(unittest.TestCase):
                     "fast_group": True,
                     "speed_Mbps": 10.5,
                     "speed_samples_Mbps": "10.00,10.50,11.00",
+                    "payload_speed_Mbps": 14.25,
                     "speed_stddev_Mbps": 0.41,
                     "speed_cv": 0.039,
                     "delay_ms": 92,
@@ -2305,6 +2436,9 @@ class NotificationTests(unittest.TestCase):
             self.assertTrue(first.is_file())
             document = first.read_text(encoding="utf-8")
             self.assertIn("10.00,10.50,11.00", document)
+            self.assertIn("全程平均 Mbps", document)
+            self.assertIn("短传输峰值 Mbps（仅诊断）", document)
+            self.assertIn("14.25", document)
             self.assertIn("90,92,94", document)
             self.assertIn("高速组内延迟最低", document)
             self.assertIn("4.00,FAIL,SKIP", document)

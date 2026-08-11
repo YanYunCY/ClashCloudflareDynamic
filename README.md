@@ -29,7 +29,7 @@ tools/privacy_check.py         发布前隐私检查
 
 `v1.3.0` 已把 Windows 安装器迁移为 WPF 单页界面：主配置位于左侧，脱敏实时摘要位于右侧，本地 Mihomo 连接设置默认折叠。界面支持“跟随系统 / 浅色 / 深色”，使用系统强调色、轻量设置卡片和响应式布局；窄窗口会收起摘要，表单可独立滚动且底部操作栏保持固定。安装器也针对 Per-Monitor V2 DPI、ClearType 和布局像素对齐做了专门处理。
 
-`v1.5.1` 修正 v2rayN/Xray 后端的公开安装模型。双击 `Install.cmd` 可选择 Clash/Mihomo 或 v2rayN/Xray；后者只使用安装用户自己填写的节点模板，通过通用 `AUTO-CF` SQLite 活动槽和 v2rayN 自身 Reload 热切换，不结束桌面主进程。Release 不包含任何节点凭据、维护者本机路径或私有拓扑。
+`v1.5.2` 统一修正 Clash/Mihomo 与 v2rayN/Xray 的测速口径：VMess、VLESS 和 HY2 全部按完整请求墙钟耗时计算排名速度，扣除 TTFB 的短传输峰值只保留为诊断。双击 `Install.cmd` 可选择两种后端；v2rayN 模式只使用安装用户自己填写的节点模板，通过通用 `AUTO-CF` SQLite 活动槽和自身 Reload 热切换，不结束桌面主进程。Release 不包含任何节点凭据、维护者本机路径或私有拓扑。
 
 ## 版本与下载
 
@@ -37,7 +37,8 @@ tools/privacy_check.py         发布前隐私检查
 
 | 版本 | 状态 | 主要变化 | 下载 |
 | --- | --- | --- | --- |
-| `v1.5.1` | 最新稳定版 | 通用 v2rayN/Xray 后端，用户自有模板驱动 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.5.1) |
+| `v1.5.2` | 最新稳定版 | 修复短样本测速虚高；全协议统一按完整墙钟吞吐排名 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.5.2) |
+| `v1.5.1` | 历史版本 | 通用 v2rayN/Xray 后端，用户自有模板驱动 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.5.1) |
 | `v1.5.0` | 历史版本 | 首次加入 v2rayN/Xray 后端；不建议新安装使用 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.5.0) |
 | `v1.4.0` | 历史稳定版 | 测速口径统一、深扫 20 MB、测速出口恢复、Release 完整门禁 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.4.0) |
 | `v1.3.7` | 历史稳定版 | 修复 ranges cache 和 JSON 临时文件原子写入 | [Release](https://github.com/YanYunCY/ClashCloudflareDynamic/releases/tag/v1.3.7) |
@@ -103,7 +104,7 @@ provider 目录位于 Clash Verge Rev 的 SAFE_PATHS 内，不应改回 `%LOCALA
 - 深度扫描：基础最多 20 个正式候选，每个候选交错测试 3 次，每次 20 MB、单次超时 60 秒；当前节点未入选时会额外追加，正式测速理论上限约 1.26 GB/轮；
 - 轻量扫描：基础最多 8 个正式候选，每次 3 MB、单次超时 20 秒；当前节点未入选时会额外追加，正式测速理论上限约 81 MB/轮；
 - `quick_speed_test_bytes` 与 `quick_speed_timeout_seconds` 独立于深扫参数，调整深扫不会再意外放大半小时轻扫流量；
-- 速度按下载响应体的实际传输时间计算，同时保留含连接与 TTFB 的全程平均速度用于诊断。
+- 排名速度按完整请求墙钟耗时计算，包含连接和 TTFB；扣除 TTFB 的短传输峰值只在日志、CSV 和 HTML 报告中用于诊断，不参与粗测排序、95% 高速组、自动切换或历史信誉。
 - 扫描成功、失败或节点选择确认超时后，测速域名使用的发现组会优先恢复到当前自动节点；若配置的独立测速出口包含自动组，则直接恢复为跟随自动组；首选恢复失败时回退到扫描前状态。
 
 正式测速前仍会发起 128 KB 预热请求，预热值不参与排名。以上均为候选满额时的理论上限，实际流量通常更低。
@@ -164,7 +165,9 @@ v2rayN 安装器只生成本机工具配置和计划任务，不安装客户端�
 
 扫描期间每个候选由独立临时 Xray 监听验证，不经过 Mihomo，也不复用 v2rayN 的活动代理端口。TUN 开启时，TCP 初筛仅把扫描 socket 绑定到 Windows 物理默认接口，普通应用路由不变。报告中的“冷启动代理响应”是每次新建完整代理链路并访问测试 URL 的响应时间，包含协议握手、目标 TLS 和首个响应，不等同于 v2rayN GUI 显示的入口 RTT。
 
-v2rayN 模式会写入一套国内直连、国外代理、私网直连和广告拦截的 Xray 路由。它不替用户修改浏览器 WebRTC 策略；有严格防泄漏要求时仍需在浏览器或企业策略层禁用非代理 UDP，并自行验证实际 DNS/WebRTC 行为。
+v2rayN 模式会写入 `CCD Full Split | CN DIRECT | Overseas PROXY | Store DIRECT | DNS/WebRTC Safe` 路由。它覆盖广告拦截、私网和中国域名/IP 直连、Microsoft Store/CDN/Windows Update 直连、Microsoft 登录与常见国外服务显式代理、常见 WebRTC/STUN UDP 强制代理，以及最终国外兜底代理；DNS 专用规则位于最终兜底之前，避免被全代理规则遮蔽。当前节点为 HY2/sing-box 时在 `binConfigs/config.json` 的 `dns`、`route` 查看实际结果；当前节点为 Xray 时在 `config.json` 的 `dns`、`routing` 和 `configPre.json` 的 TUN `dns`、`route` 查看。
+
+路由层的常见 STUN 端口保护不能代替浏览器自身的隐私策略。对 DNS/WebRTC 有严格要求时，仍应在浏览器或企业策略层禁用非代理 UDP，并验证实际出口。
 
 只生成配置、不安装任务时，可使用隔离模式：
 

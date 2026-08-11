@@ -971,6 +971,7 @@ def create_notification_report(
             f"<td>{'是' if row.get('fast_group') else '否'}</td>"
             f"<td>{_html_number(row.get('speed_Mbps'))}</td>"
             f"<td>{_html_text(row.get('speed_samples_Mbps'))}</td>"
+            f"<td>{_html_number(row.get('payload_speed_Mbps'))}</td>"
             f"<td>{_html_number(row.get('speed_stddev_Mbps'))}</td>"
             f"<td>{_html_number(speed_cv_percent)}%</td>"
             f"<td>{_html_number(row.get('delay_ms'), 0)}</td>"
@@ -980,7 +981,7 @@ def create_notification_report(
             "</tr>"
         )
     if not ranking_rows:
-        ranking_rows.append('<tr><td colspan="11" class="empty">无通过候选</td></tr>')
+        ranking_rows.append('<tr><td colspan="12" class="empty">无通过候选</td></tr>')
 
     rejected_rows = []
     for row in failed_rows:
@@ -1080,7 +1081,7 @@ def create_notification_report(
   </table></div>
   <h2>决策原因</h2><div class="reason">{_html_text(reason)}</div>
   <h2>正式测速排名</h2><div class="table-wrap"><table>
-    <thead><tr><th>#</th><th>{_html_text(node_header)}</th><th>高速组</th><th>平均速度 Mbps</th><th>三次速度 Mbps</th><th>速度 σ</th><th>速度 CV</th><th>{_html_text(average_latency_header)}</th><th>{_html_text(samples_latency_header)}</th><th>{_html_text(latency_stddev_header)}</th><th>并发负载</th></tr></thead>
+    <thead><tr><th>#</th><th>{_html_text(node_header)}</th><th>高速组</th><th>全程平均 Mbps</th><th>三次全程 Mbps</th><th>短传输峰值 Mbps（仅诊断）</th><th>速度 σ</th><th>速度 CV</th><th>{_html_text(average_latency_header)}</th><th>{_html_text(samples_latency_header)}</th><th>{_html_text(latency_stddev_header)}</th><th>并发负载</th></tr></thead>
     <tbody>{''.join(ranking_rows)}</tbody>
   </table></div>
   <h2>正式三轮测速淘汰（{counts["formal_failed_count"]}）——仅统计已进入正式测速的节点</h2>{formal_status}<div class="table-wrap"><table>
@@ -3165,16 +3166,26 @@ def speed_test(
         proxy_url,
         "--noproxy",
         "",
-        "--output",
-        os.devnull,
-        "--connect-timeout",
-        str(min(timeout_seconds, 8)),
-        "--max-time",
-        str(timeout_seconds),
-        "--write-out",
-        fmt,
-        url,
     ]
+    # Generated endpoints such as Cloudflare's ``/__down`` honor ``?bytes=``.
+    # Static benchmark files ignore that query parameter, so cap them with an
+    # HTTP range to keep a five-stream 3 MB quick test at 3 MB total.
+    static_path = urllib.parse.urlsplit(base_url).path.casefold()
+    if static_path.endswith((".bin", ".dat", ".test")):
+        cmd.extend(["--range", f"0-{requested_bytes - 1}"])
+    cmd.extend(
+        [
+            "--output",
+            os.devnull,
+            "--connect-timeout",
+            str(min(timeout_seconds, 8)),
+            "--max-time",
+            str(timeout_seconds),
+            "--write-out",
+            fmt,
+            url,
+        ]
+    )
     try:
         proc = subprocess.run(
             cmd,
@@ -3210,7 +3221,14 @@ def speed_test(
     minimum_size = requested_bytes * 0.9
     payload_seconds = total - ttfb
     if size > 0 and payload_seconds > 0:
-        speed = size / payload_seconds
+        payload_speed = size / payload_seconds
+    else:
+        payload_speed = connection_average_speed
+    # Selection and all persisted ranking fields use complete request wall
+    # time.  Subtracting TTFB exaggerates short samples, especially XHTTP, and
+    # turns a brief payload burst into a misleading sustained throughput.
+    if size > 0 and total > 0:
+        speed = size / total
     else:
         speed = connection_average_speed
     ok = 200 <= code < 400 and size >= minimum_size and speed > 0
@@ -3231,6 +3249,8 @@ def speed_test(
         "http_code": code,
         "speed_Mbps": round(speed * 8 / 1_000_000, 2),
         "speed_MB_per_s": round(speed / 1_000_000, 2),
+        "payload_speed_Mbps": round(payload_speed * 8 / 1_000_000, 2),
+        "payload_speed_MB_per_s": round(payload_speed / 1_000_000, 2),
         "connection_average_speed_Mbps": round(
             connection_average_speed * 8 / 1_000_000, 2
         ),
@@ -3250,7 +3270,12 @@ def parallel_speed_test(
     concurrency: int,
     stream_bytes: int | None = None,
 ) -> dict[str, Any]:
-    """Measure aggregate throughput without multiplying the byte budget."""
+    """Measure aggregate VMess, VLESS and HY2 throughput uniformly.
+
+    ``byte_count`` is the total payload budget.  The complete wall-clock rate
+    is authoritative; the rate after subtracting the earliest TTFB is retained
+    only as a diagnostic short-transfer peak.
+    """
 
     workers = max(1, min(16, int(concurrency)))
     if workers == 1:
@@ -3293,13 +3318,16 @@ def parallel_speed_test(
     size_download = sum(float(result.get("size_download", 0)) for result in results)
     ttfb_ms = min(float(result.get("ttfb_ms", 0)) for result in results)
     payload_seconds = max(0.001, elapsed_seconds - ttfb_ms / 1000.0)
-    speed_mbps = size_download * 8 / payload_seconds / 1_000_000
+    payload_speed_mbps = size_download * 8 / payload_seconds / 1_000_000
+    speed_mbps = size_download * 8 / elapsed_seconds / 1_000_000
     return {
         "ok": size_download >= requested_stream_bytes * workers * 0.9,
         "timed_out": False,
         "http_code": min(int(result.get("http_code", 0)) for result in results),
         "speed_Mbps": round(speed_mbps, 2),
         "speed_MB_per_s": round(speed_mbps / 8, 2),
+        "payload_speed_Mbps": round(payload_speed_mbps, 2),
+        "payload_speed_MB_per_s": round(payload_speed_mbps / 8, 2),
         "connection_average_speed_Mbps": round(
             sum(float(result.get("connection_average_speed_Mbps", 0)) for result in results),
             2,
@@ -3390,9 +3418,16 @@ def repeated_speed_test(
             ttfb_samples.append(
                 f"{float(result.get('ttfb_ms', 0.0)):.2f}"
             )
+            payload_speed = result.get("payload_speed_Mbps")
+            payload_text = (
+                f"，短传输峰值 {payload_speed} Mbps（仅诊断）"
+                if payload_speed is not None
+                else ""
+            )
             log(
                 f"{progress_prefix}第 {round_index}/{repeats} 次："
-                f"{result.get('speed_Mbps', 0)} Mbps，"
+                f"全程 {result.get('speed_Mbps', 0)} Mbps"
+                f"{payload_text}，"
                 f"TTFB {result.get('ttfb_ms', 0)} ms"
             )
         else:
@@ -3433,10 +3468,23 @@ def repeated_speed_test(
             + ("；".join(errors) if errors else "有效次数不足")
         ),
     }
+    metadata_sources = runs
+    for key in ("parallel_concurrency", "parallel_stream_bytes"):
+        values = [
+            result.get(key)
+            for result in metadata_sources
+            if result.get(key) is not None
+        ]
+        if values:
+            result_summary[key] = values[0]
     if not runs:
         return result_summary
 
     speed_values = [float(x["speed_Mbps"]) for x in runs]
+    payload_speed_values = [
+        float(x.get("payload_speed_Mbps", x["speed_Mbps"]))
+        for x in runs
+    ]
     speed_mb_values = [
         float(x.get("speed_MB_per_s", x.get("speed_MBps", 0)))
         for x in runs
@@ -3452,6 +3500,10 @@ def repeated_speed_test(
     result_summary.update({
         "speed_Mbps": round(mean_speed, 2),
         "speed_MB_per_s": round(statistics.fmean(speed_mb_values), 2),
+        "payload_speed_Mbps": round(statistics.fmean(payload_speed_values), 2),
+        "payload_speed_samples_Mbps": ",".join(
+            f"{value:.2f}" for value in payload_speed_values
+        ),
         "ttfb_ms": round(statistics.fmean(ttfb_values), 2),
         "total_ms": round(statistics.fmean(total_values), 2),
         "speed_stddev_Mbps": round(speed_stddev, 2),
@@ -3525,10 +3577,25 @@ def summarize_speed_test_rounds(
             + ("；".join(errors) if errors else "有效次数不足")
         ),
     }
+    metadata_sources = [
+        result for result in normalized if isinstance(result, dict)
+    ]
+    for key in ("parallel_concurrency", "parallel_stream_bytes"):
+        values = [
+            result.get(key)
+            for result in metadata_sources
+            if result.get(key) is not None
+        ]
+        if values:
+            result_summary[key] = values[0]
     if not runs:
         return result_summary
 
     speed_values = [float(x["speed_Mbps"]) for x in runs]
+    payload_speed_values = [
+        float(x.get("payload_speed_Mbps", x["speed_Mbps"]))
+        for x in runs
+    ]
     speed_mb_values = [
         float(x.get("speed_MB_per_s", x.get("speed_MBps", 0)))
         for x in runs
@@ -3542,6 +3609,10 @@ def summarize_speed_test_rounds(
     result_summary.update({
         "speed_Mbps": round(mean_speed, 2),
         "speed_MB_per_s": round(statistics.fmean(speed_mb_values), 2),
+        "payload_speed_Mbps": round(statistics.fmean(payload_speed_values), 2),
+        "payload_speed_samples_Mbps": ",".join(
+            f"{value:.2f}" for value in payload_speed_values
+        ),
         "ttfb_ms": round(statistics.fmean(ttfb_values), 2),
         "total_ms": round(statistics.fmean(total_values), 2),
         "speed_stddev_Mbps": round(speed_stddev, 2),
@@ -3602,9 +3673,16 @@ def interleaved_speed_tests(
             result = run_one(node_name, round_index)
             results[node_name].append(result)
             if result.get("ok"):
+                payload_speed = result.get("payload_speed_Mbps")
+                payload_text = (
+                    f"，短传输峰值 {payload_speed} Mbps（仅诊断）"
+                    if payload_speed is not None
+                    else ""
+                )
                 log(
                     f"{node_name} 第 {round_index}/{repeats} 次："
-                    f"{result.get('speed_Mbps', 0)} Mbps，"
+                    f"全程 {result.get('speed_Mbps', 0)} Mbps"
+                    f"{payload_text}，"
                     f"TTFB {result.get('ttfb_ms', 0)} ms"
                 )
             else:
@@ -3701,6 +3779,9 @@ def write_latest(rows: list[dict[str, Any]]) -> None:
         "delay_samples_ms",
         "speed_Mbps",
         "speed_MB_per_s",
+        "payload_speed_Mbps",
+        "payload_speed_MB_per_s",
+        "payload_speed_samples_Mbps",
         "ttfb_ms",
         "total_ms",
         "speed_stddev_Mbps",
@@ -4617,6 +4698,13 @@ def main() -> int:
                     "speed_stable": speed_stable,
                     "speed_Mbps": result.get("speed_Mbps", 0.0),
                     "speed_MB_per_s": result.get("speed_MB_per_s", 0.0),
+                    "payload_speed_Mbps": result.get("payload_speed_Mbps"),
+                    "payload_speed_MB_per_s": result.get(
+                        "payload_speed_MB_per_s"
+                    ),
+                    "payload_speed_samples_Mbps": result.get(
+                        "payload_speed_samples_Mbps", ""
+                    ),
                     "ttfb_ms": result.get("ttfb_ms"),
                     "total_ms": result.get("total_ms"),
                     "speed_stddev_Mbps": result.get("speed_stddev_Mbps"),
@@ -4834,8 +4922,9 @@ def main() -> int:
                     f"{i}. {row['ip']} {tag}{group_tag} | "
                     f"平均延迟 {row['delay_ms']} ms "
                     f"(σ={row.get('delay_stddev_ms', 0)}) | "
-                    f"平均速度 {row['speed_Mbps']} Mbps "
+                    f"全程平均速度 {row['speed_Mbps']} Mbps "
                     f"(σ={row.get('speed_stddev_Mbps', 0)}) | "
+                    f"短传输峰值 {row.get('payload_speed_Mbps', 0)} Mbps（仅诊断） | "
                     f"最高速占比 {row.get('speed_ratio_to_best', 0) * 100:.1f}%"
                 )
         log(

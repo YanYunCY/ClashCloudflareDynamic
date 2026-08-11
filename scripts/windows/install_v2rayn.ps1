@@ -47,6 +47,15 @@ function New-CompatibleTaskSettings([TimeSpan]$ExecutionTimeLimit) {
     return New-ScheduledTaskSettingsSet @Arguments
 }
 
+function New-V2rayNTaskPrincipal() {
+    $UserId = if ($env:USERDOMAIN) {
+        "$($env:USERDOMAIN)\$($env:USERNAME)"
+    } else {
+        [Environment]::UserName
+    }
+    return New-ScheduledTaskPrincipal -UserId $UserId -LogonType InteractiveToken -RunLevel Highest
+}
+
 function Read-JsonObject([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "JSON 文件不存在：$Path"
@@ -292,13 +301,14 @@ try {
 
     $LightSettings = New-CompatibleTaskSettings -ExecutionTimeLimit (New-TimeSpan -Minutes 20)
     $DeepSettings = New-CompatibleTaskSettings -ExecutionTimeLimit (New-TimeSpan -Minutes 150)
+    $V2rayNPrincipal = New-V2rayNTaskPrincipal
     $LightAction = New-ScheduledTaskAction -Execute $Pythonw -Argument "`"$(Join-Path $InstalledRoot 'dynamic_selector.py')`" --quick" -WorkingDirectory $InstalledRoot
     $DeepAction = New-ScheduledTaskAction -Execute $Pythonw -Argument "`"$(Join-Path $InstalledRoot 'dynamic_selector.py')`"" -WorkingDirectory $InstalledRoot
-    Register-ScheduledTask -TaskName $LightTask -Action $LightAction -Trigger (New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(3)) -RepetitionInterval (New-TimeSpan -Hours 2) -RepetitionDuration (New-TimeSpan -Days 3650)) -Settings $LightSettings -Description "每 2 小时验证 Cloudflare IP，并更新 v2rayN 原生 Xray 优选池。" -Force -ErrorAction Stop | Out-Null
-    Register-ScheduledTask -TaskName $DeepTask -Action $DeepAction -Trigger (New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(63)) -RepetitionInterval (New-TimeSpan -Hours 12) -RepetitionDuration (New-TimeSpan -Days 3650)) -Settings $DeepSettings -Description "每 12 小时深度抽样 5000 个 Cloudflare IP；深扫活动期间轻扫跳过。" -Force -ErrorAction Stop | Out-Null
+    Register-ScheduledTask -TaskName $LightTask -Action $LightAction -Trigger (New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(3)) -RepetitionInterval (New-TimeSpan -Hours 2) -RepetitionDuration (New-TimeSpan -Days 3650)) -Settings $LightSettings -Principal $V2rayNPrincipal -Description "每 2 小时验证 Cloudflare IP，并更新 v2rayN 原生 Xray 优选池。" -Force -ErrorAction Stop | Out-Null
+    Register-ScheduledTask -TaskName $DeepTask -Action $DeepAction -Trigger (New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(63)) -RepetitionInterval (New-TimeSpan -Hours 12) -RepetitionDuration (New-TimeSpan -Days 3650)) -Settings $DeepSettings -Principal $V2rayNPrincipal -Description "每 12 小时深度抽样 5000 个 Cloudflare IP；深扫活动期间轻扫跳过。" -Force -ErrorAction Stop | Out-Null
     if (Test-Path -LiteralPath (Join-Path $InstalledRoot "health_monitor.ps1")) {
         $HealthAction = New-ScheduledTaskAction -Execute $Pythonw -Argument "`"$(Join-Path $InstalledRoot 'health_monitor_launcher.py')`"" -WorkingDirectory $InstalledRoot
-        Register-ScheduledTask -TaskName $HealthTask -Action $HealthAction -Trigger (New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(10)) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 3650)) -Settings (New-CompatibleTaskSettings -ExecutionTimeLimit (New-TimeSpan -Minutes 5)) -Description "检查 v2rayN 轻扫、深扫任务及最近成功心跳。" -Force -ErrorAction Stop | Out-Null
+        Register-ScheduledTask -TaskName $HealthTask -Action $HealthAction -Trigger (New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(10)) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 3650)) -Settings (New-CompatibleTaskSettings -ExecutionTimeLimit (New-TimeSpan -Minutes 5)) -Principal $V2rayNPrincipal -Description "检查 v2rayN 轻扫、深扫任务及最近成功心跳。" -Force -ErrorAction Stop | Out-Null
     }
     foreach ($TaskName in $ConflictingTasks) {
         if ($null -ne (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) {

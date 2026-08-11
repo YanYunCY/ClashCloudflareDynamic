@@ -54,6 +54,79 @@ NRPT_TUN_DNS_COMMENT = "CCD v2rayN TUN DNS workaround"
 AUTO_MODE = "cf"
 AUTO_MODES = (AUTO_MODE,)
 
+# Explicit overrides around geoip/geosite fallbacks. Microsoft Store uses
+# global Azure/CDN names which are not reliably present in geosite:cn, while
+# Microsoft account/Office endpoints should remain proxied.
+MICROSOFT_STORE_DOMAINS = (
+    "domain:apps.microsoft.com",
+    "domain:livetileedge.dsx.mp.microsoft.com",
+    "domain:storeedgefd.dsx.mp.microsoft.com",
+    "domain:displaycatalog.mp.microsoft.com",
+    "domain:storecatalog.mp.microsoft.com",
+    "domain:purchase.md.mp.microsoft.com",
+    "domain:licensing.mp.microsoft.com",
+    "domain:licensing.md.mp.microsoft.com",
+    "domain:storecatalogrevocation.storequality.microsoft.com",
+    "domain:manage.devcenter.microsoft.com",
+    "domain:share.microsoft.com",
+    "domain:sfdataservice.microsoft.com",
+    "domain:storeedge.microsoft.com",
+    "domain:winstore.net",
+    "domain:dl.delivery.mp.microsoft.com",
+    "domain:tlu.dl.delivery.mp.microsoft.com",
+    "domain:prod.do.dsp.mp.microsoft.com",
+    "domain:delivery.mp.microsoft.com",
+    "domain:download.windowsupdate.com",
+    "domain:windowsupdate.com",
+    "domain:update.microsoft.com",
+    "domain:emdl.ws.microsoft.com",
+    "domain:definitionupdates.microsoft.com",
+    "domain:tsfe.trafficshaping.dsp.mp.microsoft.com",
+    "domain:api.cdp.microsoft.com",
+    "domain:ctldl.windowsupdate.com",
+    "domain:img-prod-cms-rt-microsoft-com.akamaized.net",
+    "domain:img-s-msn-com.akamaized.net",
+    "domain:wns.windows.com",
+    "domain:tile-service.weather.microsoft.com",
+    "domain:cdn.onenote.net",
+    "domain:evoke-windowsservices-tas.msedge.net",
+    "domain:assets1.xboxlive.com",
+    "domain:assets2.xboxlive.com",
+    "domain:assets3.xboxlive.com",
+    "domain:assets4.xboxlive.com",
+    "domain:dlassets-ssl.xboxlive.com",
+    "domain:da.xboxservices.com",
+    "domain:msftconnecttest.com",
+    "domain:store.rg-adguard.net",
+)
+MICROSOFT_GLOBAL_DOMAINS = (
+    "domain:login.live.com",
+    "domain:login.microsoft.com",
+    "domain:login.microsoftonline.com",
+    "domain:account.microsoft.com",
+    "domain:account.live.com",
+    "domain:microsoftonline.com",
+    "domain:office.com",
+    "domain:office.net",
+    "domain:sharepoint.com",
+    "domain:onedrive.live.com",
+    "domain:live.com",
+    "domain:azure.com",
+)
+OVERSEAS_SERVICE_DOMAINS = (
+    "geosite:openai",
+    "geosite:google",
+    "geosite:youtube",
+    "geosite:twitter",
+    "geosite:telegram",
+    "geosite:github",
+    "geosite:cloudflare@cn",
+    "geosite:tiktok",
+    "geosite:gfw",
+    "geosite:greatfire",
+)
+WEBRTC_STUN_PORTS = "3478,5349,19302-19309"
+
 
 def _speed_url(settings: dict[str, Any], purpose: str) -> str:
     """Return the v2rayN-specific URL for a benchmark stage.
@@ -145,12 +218,12 @@ def _auto_slot_remarks(mode: str, target_remarks: str) -> str:
 
 
 def _full_routing_rules() -> list[dict[str, Any]]:
-    """Return a v2rayN/Xray equivalent of the former Clash full split policy.
+    """Return the complete Clash-equivalent route used by Xray and TUN.
 
     v2rayN has one active proxy outbound instead of Clash's per-service selector
-    groups.  Therefore AI, streaming, social, development, and all other
-    overseas traffic share the final ``proxy`` rule while private/China traffic
-    remains direct.  The observable routing result is the same.
+    groups. Explicit overseas rules precede China fallbacks to protect against
+    geolocation mistakes, and DNS rules precede the final catch-all so they
+    cannot be shadowed.
     """
 
     definitions: list[tuple[str, dict[str, Any]]] = [
@@ -160,7 +233,7 @@ def _full_routing_rules() -> list[dict[str, Any]]:
                 "Port": "443",
                 "Network": "udp",
                 "OutboundTag": "block",
-                "Remarks": "阻断 QUIC UDP 443，防止绕过代理/TCP 策略",
+                "Remarks": "01 | BLOCK | QUIC UDP 443 (force proxied TCP)",
             },
         ),
         (
@@ -168,7 +241,7 @@ def _full_routing_rules() -> list[dict[str, Any]]:
             {
                 "OutboundTag": "block",
                 "Domain": ["geosite:category-ads-all"],
-                "Remarks": "广告与跟踪域名拦截",
+                "Remarks": "02 | BLOCK | Ads and tracking domains",
             },
         ),
         (
@@ -176,7 +249,7 @@ def _full_routing_rules() -> list[dict[str, Any]]:
             {
                 "OutboundTag": "direct",
                 "Ip": ["geoip:private"],
-                "Remarks": "局域网与保留地址直连",
+                "Remarks": "03 | DIRECT | LAN and private IP ranges",
             },
         ),
         (
@@ -184,7 +257,16 @@ def _full_routing_rules() -> list[dict[str, Any]]:
             {
                 "OutboundTag": "direct",
                 "Domain": ["geosite:private"],
-                "Remarks": "局域网域名直连",
+                "Remarks": "04 | DIRECT | LAN and private domains",
+            },
+        ),
+        (
+            "webrtc-stun-proxy",
+            {
+                "Port": WEBRTC_STUN_PORTS,
+                "Network": "udp",
+                "OutboundTag": "proxy",
+                "Remarks": "05 | PROXY | WebRTC/STUN UDP anti-leak",
             },
         ),
         (
@@ -192,7 +274,7 @@ def _full_routing_rules() -> list[dict[str, Any]]:
             {
                 "OutboundTag": "direct",
                 "Protocol": ["bittorrent"],
-                "Remarks": "BT 流量直连，避免占用代理出口",
+                "Remarks": "06 | DIRECT | BitTorrent",
             },
         ),
         (
@@ -206,7 +288,7 @@ def _full_routing_rules() -> list[dict[str, Any]]:
                     "1.12.12.12",
                     "120.53.53.53",
                 ],
-                "Remarks": "国内 DNS 服务器直连",
+                "Remarks": "07 | DIRECT | Mainland DNS server IPs",
             },
         ),
         (
@@ -219,7 +301,31 @@ def _full_routing_rules() -> list[dict[str, Any]]:
                     "domain:doh.pub",
                     "domain:dot.pub",
                 ],
-                "Remarks": "国内 DNS 域名直连",
+                "Remarks": "08 | DIRECT | Mainland DNS domains",
+            },
+        ),
+        (
+            "microsoft-store-direct",
+            {
+                "OutboundTag": "direct",
+                "Domain": list(MICROSOFT_STORE_DOMAINS),
+                "Remarks": "09 | DIRECT | Microsoft Store, CDN and Windows Update",
+            },
+        ),
+        (
+            "microsoft-global-proxy",
+            {
+                "OutboundTag": "proxy",
+                "Domain": list(MICROSOFT_GLOBAL_DOMAINS),
+                "Remarks": "10 | PROXY | Microsoft login, Office and global cloud",
+            },
+        ),
+        (
+            "overseas-services",
+            {
+                "OutboundTag": "proxy",
+                "Domain": list(OVERSEAS_SERVICE_DOMAINS),
+                "Remarks": "11 | PROXY | AI, Google, social, GitHub and restricted sites",
             },
         ),
         (
@@ -231,19 +337,7 @@ def _full_routing_rules() -> list[dict[str, Any]]:
                     "domain:max-c.com",
                     "domain:volcvideo.com",
                 ],
-                "Remarks": "小黑盒/游戏加速兼容域名直连",
-            },
-        ),
-        (
-            "overseas-priority",
-            {
-                "OutboundTag": "proxy",
-                "Domain": [
-                    "geosite:google",
-                    "geosite:gfw",
-                    "geosite:greatfire",
-                ],
-                "Remarks": "Google/GFW/受限站点强制代理",
+                "Remarks": "12 | DIRECT | Mainland game helper/CDN compatibility",
             },
         ),
         (
@@ -251,7 +345,7 @@ def _full_routing_rules() -> list[dict[str, Any]]:
             {
                 "OutboundTag": "direct",
                 "Ip": ["geoip:cn"],
-                "Remarks": "中国大陆 IP 直连",
+                "Remarks": "13 | DIRECT | Mainland China IP ranges",
             },
         ),
         (
@@ -259,7 +353,23 @@ def _full_routing_rules() -> list[dict[str, Any]]:
             {
                 "OutboundTag": "direct",
                 "Domain": ["geosite:cn"],
-                "Remarks": "中国大陆域名直连",
+                "Remarks": "14 | DIRECT | Mainland China domains",
+            },
+        ),
+        (
+            "dns-direct-inbound",
+            {
+                "InboundTag": ["direct-dns-1", "direct-dns-2"],
+                "OutboundTag": "direct",
+                "Remarks": "15 | DIRECT | DNS selected for mainland resolver",
+            },
+        ),
+        (
+            "dns-proxy-inbound",
+            {
+                "InboundTag": ["dns-module"],
+                "OutboundTag": "proxy",
+                "Remarks": "16 | PROXY | DNS selected for remote DoH",
             },
         ),
         (
@@ -267,7 +377,7 @@ def _full_routing_rules() -> list[dict[str, Any]]:
             {
                 "Port": "0-65535",
                 "OutboundTag": "proxy",
-                "Remarks": "AI/流媒体/社交/开发/国外网站及漏网流量代理",
+                "Remarks": "17 | PROXY | Final overseas and unknown traffic",
             },
         ),
     ]
@@ -302,7 +412,7 @@ def _ensure_full_routing(settings: dict[str, Any]) -> dict[str, Any]:
             (route_id,),
         ).fetchone()[0]
         expected = (
-            "CCD 全覆盖分流｜国内直连・国外代理・防泄漏",
+            "CCD Full Split | CN DIRECT | Overseas PROXY | Store DIRECT | DNS/WebRTC Safe",
             serialized,
             len(rules),
             1,
@@ -359,21 +469,64 @@ def _generated_full_routing_is_active(settings: dict[str, Any]) -> bool:
         return False
     routing = config.get("routing")
     rules = routing.get("rules") if isinstance(routing, dict) else None
+    if isinstance(rules, list):
+        has_ads = any(
+            isinstance(rule, dict)
+            and rule.get("outboundTag") == "block"
+            and "geosite:category-ads-all" in (rule.get("domain") or [])
+            for rule in rules
+        )
+        has_final_proxy = any(
+            isinstance(rule, dict)
+            and rule.get("outboundTag") == "proxy"
+            and str(rule.get("port") or "") == "0-65535"
+            for rule in rules
+        )
+        has_store_direct = any(
+            isinstance(rule, dict)
+            and rule.get("outboundTag") == "direct"
+            and "domain:apps.microsoft.com" in (rule.get("domain") or [])
+            for rule in rules
+        )
+        has_webrtc_protection = any(
+            isinstance(rule, dict)
+            and rule.get("outboundTag") == "proxy"
+            and str(rule.get("port") or "") == WEBRTC_STUN_PORTS
+            and str(rule.get("network") or "") == "udp"
+            for rule in rules
+        )
+        return has_ads and has_store_direct and has_webrtc_protection and has_final_proxy
+
+    route = config.get("route")
+    rules = route.get("rules") if isinstance(route, dict) else None
     if not isinstance(rules, list):
         return False
     has_ads = any(
         isinstance(rule, dict)
-        and rule.get("outboundTag") == "block"
-        and "geosite:category-ads-all" in (rule.get("domain") or [])
+        and rule.get("action") == "reject"
+        and "geosite-category-ads-all" in (rule.get("rule_set") or [])
+        for rule in rules
+    )
+    has_store_direct = any(
+        isinstance(rule, dict)
+        and rule.get("outbound") == "direct"
+        and "apps.microsoft.com" in (rule.get("domain_suffix") or [])
+        for rule in rules
+    )
+    has_webrtc_protection = any(
+        isinstance(rule, dict)
+        and rule.get("outbound") == "proxy"
+        and "udp" in (rule.get("network") or [])
+        and "19302:19309" in (rule.get("port_range") or [])
         for rule in rules
     )
     has_final_proxy = any(
         isinstance(rule, dict)
-        and rule.get("outboundTag") == "proxy"
-        and str(rule.get("port") or "") == "0-65535"
+        and rule.get("outbound") == "proxy"
+        and "0:65535" in (rule.get("port_range") or [])
         for rule in rules
     )
-    return has_ads and has_final_proxy
+    return has_ads and has_store_direct and has_webrtc_protection and has_final_proxy
 
 
 def _v2rayn_root(settings: dict[str, Any]) -> Path:
@@ -799,6 +952,34 @@ def _measure_delays(
         else 0.0
         for key in valid
     }
+    retry_enabled = bool(settings.get("v2rayn_delay_retry_on_empty", True))
+    retry_ratio = max(
+        0.0,
+        min(1.0, float(settings.get("v2rayn_delay_retry_min_valid_ratio", 0.05))),
+    )
+    if (
+        retry_enabled
+        and len(valid) < max(1, int(len(proxies) * retry_ratio))
+        and len(proxies) > 1
+    ):
+        retry_settings = copy.deepcopy(settings)
+        retry_settings["v2rayn_delay_retry_on_empty"] = False
+        retry_settings["v2rayn_delay_workers"] = min(
+            max(1, int(settings.get("v2rayn_delay_retry_workers", 8))),
+            max(1, int(settings.get("v2rayn_delay_workers", 48))),
+        )
+        backoff = max(
+            0.0,
+            min(30.0, float(settings.get("v2rayn_delay_retry_backoff_seconds", 2.0))),
+        )
+        selector.log(
+            "Xray 冷启动响应有效数过低，疑似瞬时 TLS/并发波动；"
+            f"首次 {len(valid)}/{len(proxies)}，等待 {backoff:g} 秒后以 "
+            f"{retry_settings['v2rayn_delay_workers']} 并发重试"
+        )
+        if backoff:
+            time.sleep(backoff)
+        return _measure_delays(proxies, retry_settings, curl_bin)
     return valid, {key: samples[key] for key in valid}, stddev
 
 
@@ -1353,7 +1534,7 @@ def _restore_active_slot(settings: dict[str, Any], profile: dict[str, Any]) -> N
 
 
 def _invoke_v2rayn_reload(executable: Path) -> None:
-    """Invoke v2rayN's Reload command through UI Automation without exiting it."""
+    """Invoke Reload even when v2rayN's WPF window is hidden in the tray."""
 
     if os.name != "nt":
         raise RuntimeError("v2rayN 热重载只支持 Windows")
@@ -1362,22 +1543,88 @@ def _invoke_v2rayn_reload(executable: Path) -> None:
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class CcdV2rayNWindowBridge {{
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lp, IntPtr p);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  public delegate bool EnumWindowsProc(IntPtr h, IntPtr p);
+  public static IntPtr FindMain(uint targetPid) {{
+    IntPtr found = IntPtr.Zero;
+    EnumWindows((h, unused) => {{
+      uint pid;
+      GetWindowThreadProcessId(h, out pid);
+      if (pid != targetPid) return true;
+      var title = new StringBuilder(512);
+      var klass = new StringBuilder(256);
+      GetWindowText(h, title, title.Capacity);
+      GetClassName(h, klass, klass.Capacity);
+      if (title.ToString().StartsWith("v2rayN", StringComparison.OrdinalIgnoreCase) ||
+          klass.ToString().StartsWith("HwndWrapper[v2rayN", StringComparison.OrdinalIgnoreCase)) {{
+        if (found == IntPtr.Zero || IsWindowVisible(h)) found = h;
+      }}
+      return true;
+    }}, IntPtr.Zero);
+    return found;
+  }}
+}}
+'@
 $cim=Get-CimInstance Win32_Process -Filter "Name='v2rayN.exe'" |
   Where-Object {{$_.ExecutablePath -eq '{escaped}'}} | Select-Object -First 1
 if(-not $cim){{throw 'v2rayN is not running'}}
 $p=Get-Process -Id $cim.ProcessId
-if(-not $p.MainWindowHandle){{throw 'v2rayN main window is unavailable'}}
-$root=[System.Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle)
-$condition=New-Object System.Windows.Automation.PropertyCondition(
-  [System.Windows.Automation.AutomationElement]::AutomationIdProperty,'menuReload')
-$element=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
-if(-not $element){{throw 'v2rayN reload control was not found'}}
-$pattern=$null
-if(-not $element.TryGetCurrentPattern(
-  [System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){{
-  throw 'v2rayN reload control cannot be invoked'
+$previousForeground=[CcdV2rayNWindowBridge]::GetForegroundWindow()
+$hwnd=[IntPtr]::Zero
+$event=$null
+try {{
+  $md5=[Security.Cryptography.MD5]::Create()
+  $eventName=(-join ($md5.ComputeHash([Text.Encoding]::UTF8.GetBytes($cim.ExecutablePath)) |
+    ForEach-Object {{ $_.ToString('x2') }}))
+  try {{
+    $event=[Threading.EventWaitHandle]::OpenExisting($eventName)
+    $event.Set() | Out-Null
+  }} catch {{
+    throw "v2rayN single-instance event unavailable: $($_.Exception.Message)"
+  }}
+  $element=$null
+  for($attempt=0; $attempt -lt 100 -and -not $element; $attempt++) {{
+    $hwnd=[CcdV2rayNWindowBridge]::FindMain([uint32]$cim.ProcessId)
+    if($hwnd -ne [IntPtr]::Zero) {{
+      try {{
+        $root=[System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+        $condition=New-Object System.Windows.Automation.PropertyCondition(
+          [System.Windows.Automation.AutomationElement]::AutomationIdProperty,'menuReload')
+        $element=$root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
+      }} catch {{ $element=$null }}
+    }}
+    if(-not $element) {{ Start-Sleep -Milliseconds 100 }}
+  }}
+  if($hwnd -eq [IntPtr]::Zero){{throw 'v2rayN main window could not be located after tray notification'}}
+  if(-not $element){{throw 'v2rayN reload control was not found after showing the main window'}}
+  $pattern=$null
+  if(-not $element.TryGetCurrentPattern(
+    [System.Windows.Automation.InvokePattern]::Pattern,[ref]$pattern)){{
+    throw 'v2rayN reload control cannot be invoked'
+  }}
+  $pattern.Invoke()
+  Start-Sleep -Milliseconds 250
+}} finally {{
+  if($hwnd -ne [IntPtr]::Zero) {{
+    [CcdV2rayNWindowBridge]::PostMessage($hwnd,0x0010,[IntPtr]::Zero,[IntPtr]::Zero) | Out-Null
+  }}
+  if($event) {{ $event.Dispose() }}
+  if($previousForeground -ne [IntPtr]::Zero) {{
+    [CcdV2rayNWindowBridge]::SetForegroundWindow($previousForeground) | Out-Null
+  }}
 }}
-$pattern.Invoke()
 """
     proc = subprocess.run(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -2291,8 +2538,9 @@ def run(args: Any, settings: dict[str, Any]) -> int:
         for index, row in enumerate(ranked, 1):
             selector.log(
                 f"{index}. {row['candidate_id']} "
-                f"原始速度[{row.get('speed_samples_Mbps', '')}] "
+                f"三次全程速度[{row.get('speed_samples_Mbps', '')}] "
                 f"平均 {row['speed_Mbps']} Mbps σ={row.get('speed_stddev_Mbps', 0)}；"
+                f"短传输峰值平均 {row.get('payload_speed_Mbps', 0)} Mbps（仅诊断）；"
                 f"并发 {row.get('parallel_concurrency', 1)}×"
                 f"{row.get('parallel_stream_bytes', 0)} bytes/流；"
                 f"原始冷启动响应[{row.get('delay_samples_ms', '')}] "
